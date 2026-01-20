@@ -20,6 +20,14 @@
 
 ## 系统概述
 
+### 主要特性
+
+- **S曲线轨迹规划**: 标准7段S曲线速度规划，实现平滑无冲击运动
+- **重力补偿**: 支持关节重力前馈补偿，提升运动精度
+- **关节限位保护**: 软限位减速+硬限位停止，保护机械臂安全
+- **实时笛卡尔控制**: 50Hz Xbox手柄笛卡尔空间实时遥控
+- **MoveIt2集成**: 支持运动规划和避障功能
+
 ### 机械臂参数
 
 | 属性 | 规格 |
@@ -206,7 +214,8 @@ ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
 | 右摇杆 Y | Pitch 旋转 |
 | LB/RB | Roll 旋转 |
 | A 键 | 切换速度档位 (5档) |
-| B 键 | 回到初始位置 |
+| B 键 | 回到初始位置 (home) |
+| X 键 | 回到零点位置 (所有关节归零) |
 
 **速度档位**:
 
@@ -224,6 +233,14 @@ ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
 
 ```bash
 ros2 launch rs_a3_moveit_config demo.launch.py
+```
+
+### 仿真模式 + Xbox 手柄控制
+
+使用仿真硬件配合 Xbox 手柄进行测试（无需真实机械臂）：
+
+```bash
+ros2 launch rs_a3_teleop sim_teleop.launch.py
 ```
 
 ### 真实硬件 + MoveIt 控制
@@ -252,12 +269,17 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 |------|--------|------|
 | `can_interface` | can0 | CAN 接口名称 |
 | `host_can_id` | 253 (0xFD) | 主机 CAN ID |
-| `position_kp` | 100.0 | 位置 PD 控制 Kp 增益 |
-| `position_kd` | 3.0 | 位置 PD 控制 Kd 增益 |
+| `position_kp` | 60.0 | 位置 PD 控制 Kp 增益 |
+| `position_kd` | 3.5 | 位置 PD 控制 Kd 增益 |
 | `velocity_limit` | 10.0 | 速度限制 (rad/s) |
-| `smoothing_alpha` | 0.2 | 低通滤波系数 (0-1) |
-| `max_velocity` | 3.0 | 最大速度限制 (rad/s) |
-| `max_acceleration` | 15.0 | 最大加速度限制 (rad/s²) |
+| `smoothing_alpha` | 0.08 | 低通滤波系数 (0-1) |
+| `max_velocity` | 2.0 | 最大速度限制 (rad/s) |
+| `max_acceleration` | 8.0 | 最大加速度限制 (rad/s²) |
+| `max_jerk` | 50.0 | 最大加加速度限制 (rad/s³) - S曲线规划 |
+| `s_curve_enabled` | true | 启用S曲线轨迹规划 |
+| `gravity_feedforward_ratio` | 0.5 | 重力补偿前馈比例 (0-1) |
+| `limit_margin` | 0.15 | 关节限位减速区域 (rad, ~8.6°) |
+| `limit_stop_margin` | 0.02 | 关节限位硬停止区域 (rad, ~1.1°) |
 
 ### 控制器参数 (`rs_a3_controllers.yaml`)
 
@@ -274,9 +296,11 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 |------|--------|------|
 | `update_rate` | 50.0 Hz | 控制循环频率 |
 | `use_fast_ik_mode` | true | 使用快速 IK 模式 |
-| `smoothing_factor` | 0.5 | 平滑滤波系数 |
-| `translation_scale` | 0.00007 | 平移缩放因子 |
-| `rotation_scale` | 0.0007 | 旋转缩放因子 |
+| `max_linear_velocity` | 0.15 | 最大线速度 (m/s) |
+| `max_angular_velocity` | 1.5 | 最大角速度 (rad/s) |
+| `joint_smoothing_alpha` | 0.3 | 关节输出平滑系数 |
+| `max_joint_velocity` | 2.0 | 单关节最大速度 (rad/s) |
+| `input_smoothing_factor` | 0.5 | 输入平滑滤波系数 |
 | `deadzone` | 0.15 | 摇杆死区阈值 |
 
 ---
@@ -451,10 +475,12 @@ colcon build --symlink-install
 │       ├── rs_a3_hardware/        # 硬件接口包
 │       │   ├── include/rs_a3_hardware/
 │       │   │   ├── rs_a3_hardware.hpp         # 硬件接口头文件
-│       │   │   └── robstride_can_driver.hpp   # CAN 驱动头文件
+│       │   │   ├── robstride_can_driver.hpp   # CAN 驱动头文件
+│       │   │   └── s_curve_generator.hpp      # S曲线轨迹生成器
 │       │   ├── src/
 │       │   │   ├── rs_a3_hardware.cpp         # 硬件接口实现
-│       │   │   └── robstride_can_driver.cpp   # CAN 驱动实现
+│       │   │   ├── robstride_can_driver.cpp   # CAN 驱动实现
+│       │   │   └── s_curve_generator.cpp      # S曲线轨迹生成器实现
 │       │   └── rs_a3_hardware_plugin.xml      # 插件描述
 │       │
 │       ├── rs_a3_moveit_config/   # MoveIt 配置包
@@ -473,6 +499,7 @@ colcon build --symlink-install
 │           │   └── xbox_teleop.yaml           # 手柄参数配置
 │           ├── launch/
 │           │   ├── real_teleop.launch.py      # 真实硬件遥控
+│           │   ├── sim_teleop.launch.py       # 仿真环境遥控
 │           │   └── complete_teleop.launch.py  # 完整遥控启动
 │           └── rs_a3_teleop/
 │               └── xbox_teleop_node.py        # 手柄控制节点
@@ -484,7 +511,8 @@ colcon build --symlink-install
 │   ├── setup_bluetooth_xbox.sh    # 蓝牙手柄配置
 │   ├── start_real_xbox_control.sh # 一键启动脚本
 │   ├── move_to_zero.py            # 移动到零位
-│   └── simple_motion_test.py      # 简单运动测试
+│   ├── simple_motion_test.py      # 简单运动测试
+│   └── foxglove_bridge.service    # Foxglove 远程可视化服务
 │
 ├── RS_A3_urdf/                    # 原始 URDF 和 mesh 文件
 │
@@ -548,4 +576,4 @@ Apache-2.0
 
 ---
 
-**最后更新**: 2026-01-08
+**最后更新**: 2026-01-20

@@ -17,10 +17,13 @@
           <param name="position_kp">80.0</param>
           <param name="position_kd">2.5</param>
           <param name="velocity_limit">10.0</param>
-          <!-- 平滑滤波参数 -->
-          <param name="smoothing_alpha">0.2</param>     <!-- 低通滤波系数 -->
+          <!-- S曲线轨迹规划参数 -->
+          <param name="s_curve_enabled">false</param>   <!-- 暂时禁用，避免与MoveIt轨迹冲突 -->
           <param name="max_velocity">3.0</param>        <!-- 最大速度限制 rad/s -->
           <param name="max_acceleration">15.0</param>   <!-- 最大加速度限制 rad/s² -->
+          <param name="max_jerk">50.0</param>           <!-- 最大加加速度限制 rad/s³ -->
+          <!-- 后备平滑滤波参数（S曲线禁用时使用） -->
+          <param name="smoothing_alpha">0.2</param>     <!-- 低通滤波系数 -->
         </xacro:unless>
       </hardware>
 

@@ -63,57 +63,78 @@ class XboxTeleopNode(Node):
         
         # 声明参数
         self.declare_parameter('update_rate', 50.0)  # Hz - 50Hz提高平滑度
-        self.declare_parameter('translation_scale', 0.0004)  # m per update (50Hz下)
-        self.declare_parameter('rotation_scale', 0.004)  # rad per update (50Hz下)
         self.declare_parameter('planning_group', 'arm')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('end_effector_frame', 'end_effector')
-        self.declare_parameter('deadzone', 0.20)  # 摇杆死区
+        self.declare_parameter('deadzone', 0.15)  # 摇杆死区
         self.declare_parameter('debug_input', False)  # 调试模式
-        self.declare_parameter('smoothing_factor', 0.5)  # 平滑滤波系数 (50Hz下)
         self.declare_parameter('use_fast_ik_mode', True)  # 使用快速IK模式实现50Hz控制
+        
+        # 笛卡尔速度参数（实际物理单位）
+        self.declare_parameter('max_linear_velocity', 0.15)   # m/s 最大线速度
+        self.declare_parameter('max_angular_velocity', 1.5)   # rad/s 最大角速度
+        
+        # 关节输出平滑参数
+        self.declare_parameter('joint_smoothing_alpha', 0.3)  # 关节平滑系数
+        self.declare_parameter('max_joint_velocity', 2.0)     # rad/s 单关节最大速度
+        
+        # 输入平滑参数
+        self.declare_parameter('input_smoothing_factor', 0.5)  # 输入平滑系数
         
         # 获取参数
         self.update_rate = self.get_parameter('update_rate').value
-        self.translation_scale = self.get_parameter('translation_scale').value
-        self.rotation_scale = self.get_parameter('rotation_scale').value
         self.planning_group = self.get_parameter('planning_group').value
         self.base_frame = self.get_parameter('base_frame').value
         self.end_effector_frame = self.get_parameter('end_effector_frame').value
         self.deadzone = self.get_parameter('deadzone').value
         self.debug_input = self.get_parameter('debug_input').value
-        self.smoothing_factor = self.get_parameter('smoothing_factor').value
         self.use_fast_ik_mode = self.get_parameter('use_fast_ik_mode').value
+        
+        # 笛卡尔速度参数
+        self.max_linear_velocity = self.get_parameter('max_linear_velocity').value
+        self.max_angular_velocity = self.get_parameter('max_angular_velocity').value
+        
+        # 关节平滑参数
+        self.joint_smoothing_alpha = self.get_parameter('joint_smoothing_alpha').value
+        self.max_joint_velocity = self.get_parameter('max_joint_velocity').value
+        
+        # 输入平滑参数
+        self.input_smoothing_factor = self.get_parameter('input_smoothing_factor').value
+        
+        # 计算时间步长
+        self.dt = 1.0 / self.update_rate
         
         # 调试计数器 - 避免日志刷屏
         self.debug_counter = 0
         
-        # 速度档位设置 (5档) - 适配50Hz更新频率
-        # 实际速度 = translation * update_rate
+        # 速度档位设置 (5档) - 使用速度比例因子
+        # 实际速度 = max_velocity * factor
         self.speed_levels = [
-            {'name': '超慢', 'translation': 0.0005, 'rotation': 0.005},   # 25mm/s, 0.25rad/s
-            {'name': '慢速', 'translation': 0.0012, 'rotation': 0.012},  # 60mm/s, 0.6rad/s
-            {'name': '中速', 'translation': 0.0024, 'rotation': 0.024},  # 120mm/s, 1.2rad/s
-            {'name': '快速', 'translation': 0.0048, 'rotation': 0.048},  # 240mm/s, 2.4rad/s
-            {'name': '极速', 'translation': 0.012, 'rotation': 0.12},    # 600mm/s, 6rad/s
+            {'name': '超慢', 'factor': 0.1},   # 10% 最大速度
+            {'name': '慢速', 'factor': 0.25},  # 25% 最大速度
+            {'name': '中速', 'factor': 0.5},   # 50% 最大速度
+            {'name': '快速', 'factor': 0.75},  # 75% 最大速度
+            {'name': '极速', 'factor': 1.0},   # 100% 最大速度
         ]
         self.current_speed_level = 2  # 默认中速 (索引从0开始)
-        # 设置初始速度
-        self.translation_scale = self.speed_levels[self.current_speed_level]['translation']
-        self.rotation_scale = self.speed_levels[self.current_speed_level]['rotation']
+        self.speed_factor = self.speed_levels[self.current_speed_level]['factor']
         
         # 按钮状态跟踪（用于防抖动）
         self.last_a_button = 0
         self.last_b_button = 0
-        self.is_going_home = False  # 是否正在回home
+        self.last_x_button = 0
+        self.is_going_home = False  # 是否正在回home/zero
         
-        # 平滑滤波器状态（指数移动平均）
-        self.smoothed_dx = 0.0
-        self.smoothed_dy = 0.0
-        self.smoothed_dz = 0.0
-        self.smoothed_droll = 0.0
-        self.smoothed_dpitch = 0.0
-        self.smoothed_dyaw = 0.0
+        # 输入平滑滤波器状态（指数移动平均）
+        self.smoothed_vx = 0.0  # 平滑后的X速度
+        self.smoothed_vy = 0.0  # 平滑后的Y速度
+        self.smoothed_vz = 0.0  # 平滑后的Z速度
+        self.smoothed_vroll = 0.0  # 平滑后的Roll角速度
+        self.smoothed_vpitch = 0.0  # 平滑后的Pitch角速度
+        self.smoothed_vyaw = 0.0  # 平滑后的Yaw角速度
+        
+        # 关节输出平滑状态
+        self.smoothed_joint_positions = None  # 平滑后的关节位置
         
         # 累积增量（用于在移动时累积输入）
         self.pending_dx = 0.0
@@ -258,8 +279,10 @@ class XboxTeleopNode(Node):
         self.get_logger().info('Xbox手柄控制节点已启动')
         self.get_logger().info(f'控制组: {self.planning_group}')
         self.get_logger().info(f'末端执行器: {self.end_effector_frame}')
-        self.get_logger().info(f'更新频率: {self.update_rate} Hz')
-        self.get_logger().info(f'平滑滤波系数: {self.smoothing_factor}')
+        self.get_logger().info(f'更新频率: {self.update_rate} Hz (dt={self.dt*1000:.1f}ms)')
+        self.get_logger().info(f'最大线速度: {self.max_linear_velocity} m/s')
+        self.get_logger().info(f'最大角速度: {self.max_angular_velocity} rad/s')
+        self.get_logger().info(f'关节平滑: alpha={self.joint_smoothing_alpha}, max_vel={self.max_joint_velocity} rad/s')
         if self.use_fast_ik_mode:
             self.get_logger().info('控制模式: 快速IK模式（50Hz笛卡尔控制）')
         else:
@@ -267,7 +290,7 @@ class XboxTeleopNode(Node):
         self.get_logger().info('=== 控制说明 ===')
         self.get_logger().info('左摇杆: XY平移 | LT/RT: Z平移')
         self.get_logger().info('右摇杆: Yaw/Roll | LB/RB: Pitch')
-        self.get_logger().info('A键: 切换速度档位 | B键: 回到初始位置')
+        self.get_logger().info('A键: 切换速度档位 | B键: 回到home位置 | X键: 回到零点')
         self.log_speed_level()
         
     def sync_current_pose(self):
@@ -385,6 +408,8 @@ class XboxTeleopNode(Node):
                 result = result_future.result()
                 self.is_going_home = False
                 self.pose_initialized = False  # 重置位姿初始化标记
+                self.smoothed_joint_positions = None  # 重置关节平滑状态
+                self.last_ik_joint_positions = None   # 重置IK种子
                 
                 # 检查结果
                 try:
@@ -446,14 +471,18 @@ class XboxTeleopNode(Node):
     def log_speed_level(self):
         """打印当前速度档位"""
         level = self.speed_levels[self.current_speed_level]
-        self.get_logger().info(f'当前速度档位: {self.current_speed_level + 1}/5 [{level["name"]}]')
+        actual_linear = self.max_linear_velocity * self.speed_factor
+        actual_angular = self.max_angular_velocity * self.speed_factor
+        self.get_logger().info(
+            f'当前速度档位: {self.current_speed_level + 1}/5 [{level["name"]}] '
+            f'(线速度={actual_linear*1000:.0f}mm/s, 角速度={actual_angular:.2f}rad/s)'
+        )
     
     def switch_speed_level(self):
         """切换速度档位"""
         self.current_speed_level = (self.current_speed_level + 1) % len(self.speed_levels)
         level = self.speed_levels[self.current_speed_level]
-        self.translation_scale = level['translation']
-        self.rotation_scale = level['rotation']
+        self.speed_factor = level['factor']
         self.log_speed_level()
     
     def go_home(self):
@@ -523,11 +552,85 @@ class XboxTeleopNode(Node):
         result = future.result().result
         self.is_going_home = False
         self.pose_initialized = False  # 重置位姿初始化标记
+        self.smoothed_joint_positions = None  # 重置关节平滑状态
+        self.last_ik_joint_positions = None   # 重置IK种子
         
         if result.error_code.val == result.error_code.SUCCESS:
             self.get_logger().info('已回到初始位置！')
         else:
             self.get_logger().warn(f'回home失败: error_code={result.error_code.val}')
+    
+    def go_zero(self):
+        """回到零点位置（所有关节归零）"""
+        if self.is_moving or self.is_going_home:
+            self.get_logger().warn('正在执行其他动作，请稍后再试')
+            return
+        
+        self.is_going_home = True
+        self.get_logger().info('正在回到零点位置...')
+        
+        # 创建MoveGroup请求
+        goal_msg = MoveGroup.Goal()
+        
+        # 设置运动请求
+        goal_msg.request.group_name = self.planning_group
+        goal_msg.request.num_planning_attempts = 5
+        goal_msg.request.allowed_planning_time = 5.0
+        goal_msg.request.max_velocity_scaling_factor = 0.3
+        goal_msg.request.max_acceleration_scaling_factor = 0.3
+        
+        # 设置目标为零点位置
+        # 零点位置: 所有关节都为0
+        joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
+        joint_values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 弧度
+        
+        constraints = Constraints()
+        for name, value in zip(joint_names, joint_values):
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = name
+            joint_constraint.position = value
+            joint_constraint.tolerance_above = 0.01
+            joint_constraint.tolerance_below = 0.01
+            joint_constraint.weight = 1.0
+            constraints.joint_constraints.append(joint_constraint)
+        
+        goal_msg.request.goal_constraints = [constraints]
+        
+        # 设置规划选项
+        goal_msg.planning_options.plan_only = False
+        goal_msg.planning_options.look_around = False
+        goal_msg.planning_options.replan = True
+        goal_msg.planning_options.replan_attempts = 3
+        
+        # 发送请求
+        send_goal_future = self.move_group_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.zero_response_callback)
+    
+    def zero_response_callback(self, future):
+        """回零点响应回调"""
+        goal_handle = future.result()
+        
+        if not goal_handle.accepted:
+            self.get_logger().warn('回零点请求被拒绝')
+            self.is_going_home = False
+            return
+        
+        self.get_logger().info('回零点请求已接受，正在执行...')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.zero_result_callback)
+    
+    def zero_result_callback(self, future):
+        """回零点结果回调"""
+        result = future.result().result
+        self.is_going_home = False
+        self.pose_initialized = False  # 重置位姿初始化标记
+        self.smoothed_joint_positions = None  # 重置关节平滑状态
+        self.last_ik_joint_positions = None   # 重置IK种子
+        
+        if result.error_code.val == result.error_code.SUCCESS:
+            self.get_logger().info('已回到零点位置！')
+        else:
+            self.get_logger().warn(f'回零点失败: error_code={result.error_code.val}')
         
     def update_callback(self):
         """定期更新回调"""
@@ -546,67 +649,75 @@ class XboxTeleopNode(Node):
             self.switch_speed_level()
         self.last_a_button = a_button
         
-        # 处理B键 - 回到初始位置（按下触发，防抖动）
+        # 处理B键 - 回到home位置（按下触发，防抖动）
         b_button = joy.buttons[1]
         if b_button == 1 and self.last_b_button == 0:
             self.go_home()
         self.last_b_button = b_button
+        
+        # 处理X键 - 回到零点（按下触发，防抖动）
+        x_button = joy.buttons[2]
+        if x_button == 1 and self.last_x_button == 0:
+            self.go_zero()
+        self.last_x_button = x_button
             
-        # 如果正在回home，跳过普通运动控制
+        # 如果正在回home/zero，跳过普通运动控制
         if self.is_going_home:
             return
             
-        # 解析手柄输入
+        # 解析手柄输入 -> 笛卡尔速度映射
         # Xbox手柄映射:
-        # 左摇杆 X: axes[0]
-        # 左摇杆 Y: axes[1]
-        # LT: axes[2] (范围 1.0 到 -1.0，按下为-1.0)
-        # RT: axes[5] (范围 1.0 到 -1.0，按下为-1.0)
-        # 右摇杆 X: axes[3]
-        # 右摇杆 Y: axes[4]
-        # LB: buttons[4]
-        # RB: buttons[5]
-        # A: buttons[0]
-        # B: buttons[1]
-            
-        # 平移控制 - 左摇杆XY对调并反向
-        raw_dx = -self.apply_deadzone(joy.axes[1]) * self.translation_scale  # 左摇杆Y -> X (反向)
-        raw_dy = -self.apply_deadzone(joy.axes[0]) * self.translation_scale  # 左摇杆X -> Y (反向)
+        # 左摇杆 X: axes[0], 左摇杆 Y: axes[1]
+        # LT: axes[2], RT: axes[5] (范围 1.0 到 -1.0，按下为-1.0)
+        # 右摇杆 X: axes[3], 右摇杆 Y: axes[4]
+        # LB: buttons[4], RB: buttons[5]
+        # A: buttons[0], B: buttons[1]
         
-        # LT/RT控制Z - 使用带死区的扳机处理
+        # ============ 笛卡尔速度映射 ============
+        # 摇杆输入 → 速度(m/s, rad/s) → 位置增量
+        
+        # 计算当前档位下的实际最大速度
+        current_max_linear = self.max_linear_velocity * self.speed_factor
+        current_max_angular = self.max_angular_velocity * self.speed_factor
+        
+        # 平移速度 - 左摇杆XY对调并反向
+        raw_vx = -self.apply_deadzone(joy.axes[1]) * current_max_linear  # 左摇杆Y -> X速度 (m/s)
+        raw_vy = -self.apply_deadzone(joy.axes[0]) * current_max_linear  # 左摇杆X -> Y速度 (m/s)
+        
+        # LT/RT控制Z速度
         lt = self.apply_trigger_deadzone(joy.axes[2])  # 转换为0-1范围并应用死区
         rt = self.apply_trigger_deadzone(joy.axes[5])  # 转换为0-1范围并应用死区
-        raw_dz = (rt - lt) * self.translation_scale  # RT向上，LT向下
+        raw_vz = (rt - lt) * current_max_linear  # RT向上，LT向下 (m/s)
         
-        # 旋转控制
-        raw_dyaw = self.apply_deadzone(joy.axes[3]) * self.rotation_scale  # 右摇杆X -> Yaw
-        raw_droll = self.apply_deadzone(joy.axes[4]) * self.rotation_scale  # 右摇杆Y -> Roll
+        # 旋转速度
+        raw_vyaw = self.apply_deadzone(joy.axes[3]) * current_max_angular   # 右摇杆X -> Yaw速度 (rad/s)
+        raw_vroll = self.apply_deadzone(joy.axes[4]) * current_max_angular  # 右摇杆Y -> Roll速度 (rad/s)
         
-        # LB/RB控制Pitch
-        raw_dpitch = (joy.buttons[5] - joy.buttons[4]) * self.rotation_scale  # RB正，LB负
+        # LB/RB控制Pitch速度
+        raw_vpitch = (joy.buttons[5] - joy.buttons[4]) * current_max_angular  # RB正，LB负 (rad/s)
         
-        # 应用平滑滤波器（指数移动平均 EMA）
-        # smoothed = alpha * raw + (1 - alpha) * smoothed_prev
-        alpha = self.smoothing_factor
-        self.smoothed_dx = alpha * raw_dx + (1 - alpha) * self.smoothed_dx
-        self.smoothed_dy = alpha * raw_dy + (1 - alpha) * self.smoothed_dy
-        self.smoothed_dz = alpha * raw_dz + (1 - alpha) * self.smoothed_dz
-        self.smoothed_droll = alpha * raw_droll + (1 - alpha) * self.smoothed_droll
-        self.smoothed_dpitch = alpha * raw_dpitch + (1 - alpha) * self.smoothed_dpitch
-        self.smoothed_dyaw = alpha * raw_dyaw + (1 - alpha) * self.smoothed_dyaw
+        # 应用输入平滑滤波器（指数移动平均 EMA）
+        alpha = self.input_smoothing_factor
+        self.smoothed_vx = alpha * raw_vx + (1 - alpha) * self.smoothed_vx
+        self.smoothed_vy = alpha * raw_vy + (1 - alpha) * self.smoothed_vy
+        self.smoothed_vz = alpha * raw_vz + (1 - alpha) * self.smoothed_vz
+        self.smoothed_vroll = alpha * raw_vroll + (1 - alpha) * self.smoothed_vroll
+        self.smoothed_vpitch = alpha * raw_vpitch + (1 - alpha) * self.smoothed_vpitch
+        self.smoothed_vyaw = alpha * raw_vyaw + (1 - alpha) * self.smoothed_vyaw
         
-        # 使用平滑后的值
-        dx = self.smoothed_dx
-        dy = self.smoothed_dy
-        dz = self.smoothed_dz
-        droll = self.smoothed_droll
-        dpitch = self.smoothed_dpitch
-        dyaw = self.smoothed_dyaw
+        # 速度 × dt = 位置增量
+        dx = self.smoothed_vx * self.dt
+        dy = self.smoothed_vy * self.dt
+        dz = self.smoothed_vz * self.dt
+        droll = self.smoothed_vroll * self.dt
+        dpitch = self.smoothed_vpitch * self.dt
+        dyaw = self.smoothed_vyaw * self.dt
         
-        # 检查是否有输入 - 使用更大的阈值避免漂移
-        # 阈值设为缩放因子的 1/10，确保只有明显的输入才会触发运动
-        translation_threshold = self.translation_scale * 0.01  # 非常小的移动忽略
-        rotation_threshold = self.rotation_scale * 0.01
+        # 检查是否有输入 - 基于速度阈值
+        velocity_threshold = 0.001  # 1mm/s 以下视为无输入
+        angular_threshold = 0.01    # 0.01 rad/s 以下视为无输入
+        translation_threshold = velocity_threshold * self.dt
+        rotation_threshold = angular_threshold * self.dt
         
         has_translation = abs(dx) > translation_threshold or abs(dy) > translation_threshold or abs(dz) > translation_threshold
         has_rotation = abs(dyaw) > rotation_threshold or abs(dpitch) > rotation_threshold or abs(droll) > rotation_threshold
@@ -797,15 +908,15 @@ class XboxTeleopNode(Node):
                 else:
                     return  # 缺少关节数据
             
-            # 【修复】直接使用IK解，不做严格限制
-            # 让硬件层的平滑逻辑来处理实际运动，避免误差累积
+            # 检查IK解变化是否太小
             if self.last_ik_joint_positions is not None:
                 max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i]) for i in range(len(ik_positions)))
                 if max_diff < 0.0001:  # 变化太小，跳过
                     return
             
-            # 直接使用IK解
-            target_positions = ik_positions
+            # 【关键】应用关节输出平滑滤波
+            # 避免IK解跳变导致的机械冲击
+            target_positions = self.smooth_joint_positions(ik_positions)
             self.last_ik_joint_positions = target_positions
             
             # 【调试】发布IK解到/debug/ik_solution
@@ -840,6 +951,41 @@ class XboxTeleopNode(Node):
             
         except Exception as e:
             self.get_logger().error(f'IK回调异常: {e}')
+    
+    def smooth_joint_positions(self, target_positions):
+        """对IK输出的关节位置进行平滑滤波
+        
+        使用一阶低通滤波 + 速度限制，避免关节跳变导致的机械冲击。
+        
+        Args:
+            target_positions: IK解出的目标关节位置列表
+            
+        Returns:
+            平滑后的关节位置列表
+        """
+        # 首次调用时初始化
+        if self.smoothed_joint_positions is None:
+            self.smoothed_joint_positions = list(target_positions)
+            return target_positions
+        
+        smoothed = []
+        alpha = self.joint_smoothing_alpha
+        max_delta = self.max_joint_velocity * self.dt  # 单周期最大允许变化量
+        
+        for i in range(len(target_positions)):
+            # 一阶低通滤波
+            filtered_pos = alpha * target_positions[i] + (1 - alpha) * self.smoothed_joint_positions[i]
+            
+            # 速度限制（防止关节跳变）
+            delta = filtered_pos - self.smoothed_joint_positions[i]
+            if abs(delta) > max_delta:
+                # 限制变化量
+                filtered_pos = self.smoothed_joint_positions[i] + max_delta * (1 if delta > 0 else -1)
+            
+            smoothed.append(filtered_pos)
+        
+        self.smoothed_joint_positions = smoothed
+        return smoothed
     
     def send_joint_positions(self, positions):
         """直接发送关节位置到控制器（不经过IK）"""
