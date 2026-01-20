@@ -75,11 +75,19 @@ class XboxTeleopNode(Node):
         self.declare_parameter('max_angular_velocity', 1.5)   # rad/s 最大角速度
         
         # 关节输出平滑参数
-        self.declare_parameter('joint_smoothing_alpha', 0.3)  # 关节平滑系数
-        self.declare_parameter('max_joint_velocity', 2.0)     # rad/s 单关节最大速度
+        self.declare_parameter('joint_smoothing_alpha', 0.15)  # 关节平滑系数
+        self.declare_parameter('max_joint_velocity', 1.5)      # rad/s 单关节最大速度
+        self.declare_parameter('max_joint_acceleration', 5.0)  # rad/s² 单关节最大加速度
         
         # 输入平滑参数
         self.declare_parameter('input_smoothing_factor', 0.5)  # 输入平滑系数
+        
+        # 奇异点保护参数
+        self.declare_parameter('max_ik_jump_threshold', 0.5)   # rad 单关节最大允许跳变
+        self.declare_parameter('singularity_warning_count', 5) # 连续拒绝警告阈值
+        
+        # 碰撞检测参数
+        self.declare_parameter('enable_collision_check', True)  # 是否在初始化后启用碰撞检测
         
         # 获取参数
         self.update_rate = self.get_parameter('update_rate').value
@@ -97,9 +105,21 @@ class XboxTeleopNode(Node):
         # 关节平滑参数
         self.joint_smoothing_alpha = self.get_parameter('joint_smoothing_alpha').value
         self.max_joint_velocity = self.get_parameter('max_joint_velocity').value
+        self.max_joint_acceleration = self.get_parameter('max_joint_acceleration').value
+        self.last_joint_velocities = None  # 上一帧关节速度（用于加速度限制）
         
         # 输入平滑参数
         self.input_smoothing_factor = self.get_parameter('input_smoothing_factor').value
+        
+        # 奇异点保护参数
+        self.max_ik_jump_threshold = self.get_parameter('max_ik_jump_threshold').value
+        self.singularity_warning_count = self.get_parameter('singularity_warning_count').value
+        self.consecutive_ik_rejects = 0  # 连续拒绝计数器
+        self.ik_seed_just_initialized = False  # IK种子刚初始化标志，跳过首帧跳变检测
+        
+        # 碰撞检测参数
+        self.enable_collision_check = self.get_parameter('enable_collision_check').value
+        self.collision_check_active = False  # 初始化期间关闭，完成后开启
         
         # 计算时间步长
         self.dt = 1.0 / self.update_rate
@@ -269,9 +289,9 @@ class XboxTeleopNode(Node):
                 if i < len(self.current_joint_state.position):
                     self.get_logger().info(f'  {name}: {self.current_joint_state.position[i]:.4f} rad')
         
-        # 3. 自动运动到home位置
-        self.get_logger().info('正在规划运动至home位置...')
-        self.startup_go_home()
+        # 3. 自动运动到零点位置
+        self.get_logger().info('正在规划运动至零点位置...')
+        self.startup_go_zero()
         
         # 创建定时器，定期更新目标位姿
         self.timer = self.create_timer(1.0 / self.update_rate, self.update_callback)
@@ -323,9 +343,20 @@ class XboxTeleopNode(Node):
                                      f'y={self.target_pose.pose.position.y:.4f}, '
                                      f'z={self.target_pose.pose.position.z:.4f}')
                 # 【关键】同时初始化IK种子为当前关节状态，确保首次IK解的连续性
+                # 注意：必须按self.joint_names的顺序提取，因为joint_states中的顺序可能不同
                 if self.current_joint_state:
-                    self.last_ik_joint_positions = list(self.current_joint_state.position[:6])
+                    seed_positions = []
+                    for joint_name in self.joint_names:
+                        if joint_name in self.current_joint_state.name:
+                            idx = self.current_joint_state.name.index(joint_name)
+                            seed_positions.append(self.current_joint_state.position[idx])
+                        else:
+                            seed_positions.append(0.0)  # 默认值
+                    self.last_ik_joint_positions = seed_positions
                     self.get_logger().info(f'初始化IK种子: {[f"{p:.3f}" for p in self.last_ik_joint_positions]}')
+                    # 标记IK种子刚初始化，跳过首帧跳变检测
+                    self.ik_seed_just_initialized = True
+                    self.consecutive_ik_rejects = 0
                 self.pose_initialized = True
             
             return True
@@ -349,8 +380,8 @@ class XboxTeleopNode(Node):
                 return False
         return True
     
-    def startup_go_home(self):
-        """启动时运动到home位置（同步执行）"""
+    def startup_go_zero(self):
+        """启动时运动到零点位置（同步执行），完成后开启碰撞检测"""
         import time
         
         self.is_going_home = True
@@ -370,10 +401,10 @@ class XboxTeleopNode(Node):
             goal_msg.request.max_velocity_scaling_factor = 0.15  # 启动时更慢速运动更安全
             goal_msg.request.max_acceleration_scaling_factor = 0.15
             
-            # 设置目标关节位置 (home位置)
-            # home位置: L1=0, L2=45°, L3=-45°, L4=0, L5=0, L6=0
+            # 设置目标关节位置 (零点位置)
+            # 零点位置: 所有关节归零
             joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
-            joint_values = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]  # 弧度
+            joint_values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 所有关节归零
             
             constraints = Constraints()
             for name, value in zip(joint_names, joint_values):
@@ -391,7 +422,7 @@ class XboxTeleopNode(Node):
             goal_msg.planning_options.replan_attempts = 3
             
             # 发送请求并等待结果
-            self.get_logger().info(f'发送home运动请求... (尝试 {retry + 1}/{max_retries})')
+            self.get_logger().info(f'发送零点运动请求... (尝试 {retry + 1}/{max_retries})')
             send_goal_future = self.move_group_client.send_goal_async(goal_msg)
             
             # 等待goal被接受
@@ -399,7 +430,7 @@ class XboxTeleopNode(Node):
             goal_handle = send_goal_future.result()
             
             if goal_handle and goal_handle.accepted:
-                self.get_logger().info('Home运动请求已接受，正在缓慢执行...')
+                self.get_logger().info('零点运动请求已接受，正在缓慢执行...')
                 
                 # 等待执行完成
                 result_future = goal_handle.get_result_async()
@@ -414,20 +445,24 @@ class XboxTeleopNode(Node):
                 # 检查结果
                 try:
                     if result and result.result and result.result.error_code.val == result.result.error_code.SUCCESS:
-                        self.get_logger().info('✓ 已缓慢运动到home位置！')
+                        self.get_logger().info('✓ 已缓慢运动到零点位置！')
+                        # 运动成功后开启碰撞检测
+                        if self.enable_collision_check:
+                            self.collision_check_active = True
+                            self.get_logger().info('✓ 碰撞检测已开启')
                         return True
                     else:
                         error_code = 'unknown'
                         if result and result.result and hasattr(result.result, 'error_code'):
                             error_code = result.result.error_code.val
-                        self.get_logger().warn(f'Home运动执行失败: error_code={error_code}')
+                        self.get_logger().warn(f'零点运动执行失败: error_code={error_code}')
                 except Exception as e:
-                    self.get_logger().warn(f'Home运动结果解析失败: {e}')
+                    self.get_logger().warn(f'零点运动结果解析失败: {e}')
             else:
-                self.get_logger().warn(f'Home运动请求被拒绝，等待重试...')
+                self.get_logger().warn(f'零点运动请求被拒绝，等待重试...')
                 time.sleep(2.0)  # 等待后重试
         
-        self.get_logger().error('Home运动多次尝试后失败，请手动控制机械臂')
+        self.get_logger().error('零点运动多次尝试后失败，请手动控制机械臂')
         self.is_going_home = False
         return False
     
@@ -879,6 +914,9 @@ class XboxTeleopNode(Node):
         request.ik_request.timeout.sec = 0
         request.ik_request.timeout.nanosec = 10_000_000  # 10ms超时
         
+        # 设置碰撞检测
+        request.ik_request.avoid_collisions = self.collision_check_active
+        
         # 异步调用IK服务
         self.pending_ik_request = True
         future = self.ik_client.call_async(request)
@@ -908,11 +946,35 @@ class XboxTeleopNode(Node):
                 else:
                     return  # 缺少关节数据
             
-            # 检查IK解变化是否太小
+            # 检查IK解变化是否太小或太大
             if self.last_ik_joint_positions is not None:
                 max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i]) for i in range(len(ik_positions)))
-                if max_diff < 0.0001:  # 变化太小，跳过
+                
+                # 变化太小，跳过
+                if max_diff < 0.0001:
                     return
+                
+                # 【奇异点保护】变化过大，拒绝该IK解
+                # 但如果IK种子刚初始化，跳过首帧检测以建立正确基准
+                if max_diff > self.max_ik_jump_threshold:
+                    if self.ik_seed_just_initialized:
+                        # 首帧：接受IK解，清除标志
+                        self.get_logger().info(f'IK种子初始化后首帧，接受IK解 (diff={max_diff:.3f}rad)')
+                        self.ik_seed_just_initialized = False
+                    else:
+                        self.consecutive_ik_rejects += 1
+                        if self.consecutive_ik_rejects >= self.singularity_warning_count:
+                            self.get_logger().warn(
+                                f'检测到奇异点区域，IK解跳变={max_diff:.3f}rad，已保护{self.consecutive_ik_rejects}帧'
+                            )
+                        # 拒绝该解，继续使用上一次的关节位置
+                        return
+                else:
+                    # IK解正常，重置计数器和标志
+                    if self.consecutive_ik_rejects > 0:
+                        self.consecutive_ik_rejects = 0
+                    if self.ik_seed_just_initialized:
+                        self.ik_seed_just_initialized = False
             
             # 【关键】应用关节输出平滑滤波
             # 避免IK解跳变导致的机械冲击
@@ -955,7 +1017,7 @@ class XboxTeleopNode(Node):
     def smooth_joint_positions(self, target_positions):
         """对IK输出的关节位置进行平滑滤波
         
-        使用一阶低通滤波 + 速度限制，避免关节跳变导致的机械冲击。
+        使用一阶低通滤波 + 速度限制 + 加速度限制，避免关节跳变导致的机械冲击。
         
         Args:
             target_positions: IK解出的目标关节位置列表
@@ -966,25 +1028,42 @@ class XboxTeleopNode(Node):
         # 首次调用时初始化
         if self.smoothed_joint_positions is None:
             self.smoothed_joint_positions = list(target_positions)
+            self.last_joint_velocities = [0.0] * len(target_positions)
             return target_positions
         
+        # 确保速度数组已初始化
+        if self.last_joint_velocities is None:
+            self.last_joint_velocities = [0.0] * len(target_positions)
+        
         smoothed = []
+        new_velocities = []
         alpha = self.joint_smoothing_alpha
-        max_delta = self.max_joint_velocity * self.dt  # 单周期最大允许变化量
+        max_delta_v = self.max_joint_acceleration * self.dt  # 单周期最大速度变化量
         
         for i in range(len(target_positions)):
             # 一阶低通滤波
             filtered_pos = alpha * target_positions[i] + (1 - alpha) * self.smoothed_joint_positions[i]
             
-            # 速度限制（防止关节跳变）
-            delta = filtered_pos - self.smoothed_joint_positions[i]
-            if abs(delta) > max_delta:
-                # 限制变化量
-                filtered_pos = self.smoothed_joint_positions[i] + max_delta * (1 if delta > 0 else -1)
+            # 计算期望速度
+            desired_velocity = (filtered_pos - self.smoothed_joint_positions[i]) / self.dt
             
-            smoothed.append(filtered_pos)
+            # 加速度限制（限制速度变化率）
+            velocity_change = desired_velocity - self.last_joint_velocities[i]
+            if abs(velocity_change) > max_delta_v:
+                desired_velocity = self.last_joint_velocities[i] + max_delta_v * (1 if velocity_change > 0 else -1)
+            
+            # 速度限制
+            if abs(desired_velocity) > self.max_joint_velocity:
+                desired_velocity = self.max_joint_velocity * (1 if desired_velocity > 0 else -1)
+            
+            # 计算最终位置
+            final_pos = self.smoothed_joint_positions[i] + desired_velocity * self.dt
+            
+            smoothed.append(final_pos)
+            new_velocities.append(desired_velocity)
         
         self.smoothed_joint_positions = smoothed
+        self.last_joint_velocities = new_velocities
         return smoothed
     
     def send_joint_positions(self, positions):
@@ -1068,7 +1147,7 @@ class XboxTeleopNode(Node):
         # 设置参数
         request.max_step = 0.01  # 10mm步长
         request.jump_threshold = 0.0  # 禁用跳跃检测
-        request.avoid_collisions = False  # 关闭碰撞检测加速
+        request.avoid_collisions = self.collision_check_active  # 根据状态启用碰撞检测
         
         # 异步调用服务
         future = self.cartesian_path_client.call_async(request)

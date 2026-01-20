@@ -27,6 +27,10 @@
 - **关节限位保护**: 软限位减速+硬限位停止，保护机械臂安全
 - **实时笛卡尔控制**: 50Hz Xbox手柄笛卡尔空间实时遥控
 - **MoveIt2集成**: 支持运动规划和避障功能
+- **笛卡尔速度映射**: 摇杆输入直接映射为末端执行器速度
+- **多级平滑滤波**: 输入平滑 + 关节输出平滑 + 加速度限制，消除抖动
+- **奇异点保护**: 自动检测并拒绝导致剧烈跳变的IK解
+- **碰撞检测**: 启动后自动开启自碰撞和环境碰撞检测
 
 ### 机械臂参数
 
@@ -269,8 +273,8 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 |------|--------|------|
 | `can_interface` | can0 | CAN 接口名称 |
 | `host_can_id` | 253 (0xFD) | 主机 CAN ID |
-| `position_kp` | 60.0 | 位置 PD 控制 Kp 增益 |
-| `position_kd` | 3.5 | 位置 PD 控制 Kd 增益 |
+| `position_kp` | 120.0 | 位置 PD 控制 Kp 增益 |
+| `position_kd` | 2.5 | 位置 PD 控制 Kd 增益 |
 | `velocity_limit` | 10.0 | 速度限制 (rad/s) |
 | `smoothing_alpha` | 0.08 | 低通滤波系数 (0-1) |
 | `max_velocity` | 2.0 | 最大速度限制 (rad/s) |
@@ -298,10 +302,14 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 | `use_fast_ik_mode` | true | 使用快速 IK 模式 |
 | `max_linear_velocity` | 0.15 | 最大线速度 (m/s) |
 | `max_angular_velocity` | 1.5 | 最大角速度 (rad/s) |
-| `joint_smoothing_alpha` | 0.3 | 关节输出平滑系数 |
-| `max_joint_velocity` | 2.0 | 单关节最大速度 (rad/s) |
-| `input_smoothing_factor` | 0.5 | 输入平滑滤波系数 |
+| `joint_smoothing_alpha` | 0.15 | 关节输出平滑系数 (0-1，越小越平滑) |
+| `max_joint_velocity` | 1.5 | 单关节最大速度 (rad/s) |
+| `max_joint_acceleration` | 5.0 | 单关节最大加速度 (rad/s²) |
+| `input_smoothing_factor` | 0.3 | 输入平滑滤波系数 |
 | `deadzone` | 0.15 | 摇杆死区阈值 |
+| `max_ik_jump_threshold` | 0.5 | 单关节最大允许跳变 (rad) |
+| `singularity_warning_count` | 5 | 连续拒绝IK解警告阈值 |
+| `enable_collision_check` | true | 启用碰撞检测 |
 
 ---
 
@@ -449,6 +457,35 @@ colcon build --symlink-install
 2. 增加 `smoothing_alpha` 值 (更平滑但响应变慢)
 3. 检查关节是否有机械间隙
 4. 降低控制频率
+
+### 抖动抑制机制
+
+系统采用多级平滑策略消除机械臂运动抖动：
+
+**1. 输入平滑 (Input Smoothing)**
+- 参数: `input_smoothing_factor` (默认 0.3)
+- 对摇杆原始输入进行一阶低通滤波
+- 消除手抖和传感器噪声
+
+**2. 关节输出平滑 (Joint Output Smoothing)**
+- 参数: `joint_smoothing_alpha` (默认 0.15)
+- 对IK求解结果进行低通滤波
+- 公式: `filtered = α × target + (1-α) × previous`
+
+**3. 速度限制 (Velocity Limiting)**
+- 参数: `max_joint_velocity` (默认 1.5 rad/s)
+- 限制单关节每周期最大位移
+- 防止IK解跳变导致的急速运动
+
+**4. 加速度限制 (Acceleration Limiting)**
+- 参数: `max_joint_acceleration` (默认 5.0 rad/s²)
+- 限制速度变化率，确保平滑加减速
+- 避免电机力矩突变
+
+**5. 奇异点保护 (Singularity Protection)**
+- 参数: `max_ik_jump_threshold` (默认 0.5 rad)
+- 检测并拒绝导致关节大幅跳变的IK解
+- 在奇异点附近保持稳定
 
 ---
 
