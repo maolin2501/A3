@@ -234,6 +234,13 @@ class XboxTeleopNode(Node):
             10
         )
         
+        # 【调试】原始IK解发布器（处理前）- 用于对比
+        self.ik_raw_solution_pub = self.create_publisher(
+            JointState,
+            '/debug/ik_raw_solution',
+            10
+        )
+        
         # IK请求状态跟踪（用于快速IK模式）
         self.pending_ik_request = False  # 是否有待处理的IK请求
         self.last_ik_joint_positions = None  # 缓存上一次的IK关节位置
@@ -800,12 +807,10 @@ class XboxTeleopNode(Node):
         has_rotation = abs(dyaw) > rotation_threshold or abs(dpitch) > rotation_threshold or abs(droll) > rotation_threshold
         
         if not has_translation and not has_rotation:
-            # 【关键修复】即使没有输入，在IK模式下也要持续发送当前关节位置
-            # 这样可以防止机械臂因重力下垂而偏离目标位置
-            if self.use_fast_ik_mode and self.pose_initialized and self.last_ik_joint_positions is not None:
-                self.send_joint_positions(self.last_ik_joint_positions)
-                # 【调试】持续发布上一帧IK解
-                self.publish_ik_debug(self.last_ik_joint_positions)
+            # 【修改】即使没有输入，也持续计算IK，确保调试话题有最新数据
+            # 同时可以观察IK解在静止状态下的稳定性
+            if self.use_fast_ik_mode and self.pose_initialized:
+                self.send_cartesian_goal()  # 持续调用IK计算当前目标位姿
             return  # 没有有效输入，不更新目标位姿
         
         # 累积增量
@@ -988,6 +993,9 @@ class XboxTeleopNode(Node):
                 else:
                     return  # 缺少关节数据
             
+            # 【调试】发布原始IK解（任何处理之前）
+            self.publish_ik_raw_debug(ik_positions)
+            
             # 检查IK解变化是否太小或太大
             if self.last_ik_joint_positions is not None:
                 max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i]) for i in range(len(ik_positions)))
@@ -1160,6 +1168,27 @@ class XboxTeleopNode(Node):
             ik_debug_msg.position = list(positions)
             
         self.ik_solution_pub.publish(ik_debug_msg)
+    
+    def publish_ik_raw_debug(self, positions):
+        """发布原始IK解（处理前）到/debug/ik_raw_solution，用于对比"""
+        ik_raw_msg = JointState()
+        ik_raw_msg.header.stamp = self.get_clock().now().to_msg()
+        
+        if self.current_joint_state is not None:
+            ik_raw_msg.name = self.current_joint_state.name
+            pos_map = {name: pos for name, pos in zip(self.joint_names, positions)}
+            ordered_positions = []
+            for name in ik_raw_msg.name:
+                if name in pos_map:
+                    ordered_positions.append(pos_map[name])
+                else:
+                    ordered_positions.append(0.0)
+            ik_raw_msg.position = ordered_positions
+        else:
+            ik_raw_msg.name = self.joint_names
+            ik_raw_msg.position = list(positions)
+            
+        self.ik_raw_solution_pub.publish(ik_raw_msg)
     
     def send_cartesian_path_goal(self):
         """使用MoveIt笛卡尔路径规划 - 保证RViz显示更新和精确控制（传统模式）"""
