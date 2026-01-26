@@ -1,0 +1,585 @@
+#!/usr/bin/env python3
+"""
+RS-A3 机械臂惯性参数标定程序
+
+使用 Pinocchio 动力学库，通过在多个关节配置下测量力矩数据，
+拟合各连杆的惯性参数（质量、质心位置），实现精确的重力补偿。
+
+标定流程：
+1. 生成多关节组合测试点
+2. 依次移动到每个配置，采集稳态力矩
+3. 使用 scipy.optimize 拟合惯性参数
+4. 验证拟合质量并保存配置
+
+使用方法：
+    python3 inertia_calibration.py [--quick] [--output PATH]
+"""
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
+from sensor_msgs.msg import JointState
+from builtin_interfaces.msg import Duration
+
+import numpy as np
+from scipy.optimize import minimize
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple
+import time
+import argparse
+import yaml
+from datetime import datetime
+
+try:
+    import pinocchio as pin
+    PINOCCHIO_AVAILABLE = True
+except ImportError:
+    PINOCCHIO_AVAILABLE = False
+    print("错误: 需要安装 Pinocchio 库")
+    print("  sudo apt install ros-humble-pinocchio")
+
+
+@dataclass
+class CalibrationConfig:
+    """标定配置"""
+    urdf_path: str = "/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf"
+    output_path: str = "/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml"
+    
+    joint_names: List[str] = field(default_factory=lambda: [
+        'L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint'
+    ])
+    
+    # 基准位置（避开零点）
+    home_position: List[float] = field(default_factory=lambda: [0.0, 0.785, -0.785, 0.5, 0.5, 0.0])
+    
+    # 采样参数
+    samples_per_config: int = 40
+    settle_time: float = 1.5
+    sample_interval: float = 0.02
+    motion_duration: float = 5.0
+
+
+class InertiaCalibrator(Node):
+    """惯性参数标定器"""
+    
+    def __init__(self, config: CalibrationConfig):
+        super().__init__('inertia_calibrator')
+        
+        self.config = config
+        self.joint_names = config.joint_names
+        
+        # 当前状态
+        self.current_positions = [0.0] * 6
+        self.current_efforts = [0.0] * 6
+        self.state_received = False
+        
+        # Pinocchio 模型
+        self.model = None
+        self.data = None
+        
+        # 标定数据
+        self.calibration_data: List[Tuple[np.ndarray, np.ndarray]] = []
+        
+        # ROS2 接口
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states', self.joint_state_callback, 10)
+        
+        self._action_client = ActionClient(
+            self, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
+        
+        # 初始化 Pinocchio
+        if PINOCCHIO_AVAILABLE:
+            self.init_pinocchio()
+    
+    def init_pinocchio(self):
+        """初始化 Pinocchio 模型"""
+        try:
+            self.model = pin.buildModelFromUrdf(self.config.urdf_path)
+            self.data = pin.Data(self.model)
+            self.get_logger().info(f'Pinocchio 模型加载成功: {self.model.njoints} 个关节')
+            return True
+        except Exception as e:
+            self.get_logger().error(f'Pinocchio 加载失败: {e}')
+            return False
+    
+    def joint_state_callback(self, msg: JointState):
+        """关节状态回调"""
+        for i, name in enumerate(self.joint_names):
+            if name in msg.name:
+                idx = msg.name.index(name)
+                self.current_positions[i] = msg.position[idx]
+                if idx < len(msg.effort):
+                    self.current_efforts[i] = msg.effort[idx]
+        self.state_received = True
+    
+    def move_to_position(self, target: List[float], duration: float = None) -> bool:
+        """移动到目标位置"""
+        if duration is None:
+            duration = self.config.motion_duration
+        
+        if not self._action_client.wait_for_server(timeout_sec=5.0):
+            return False
+        
+        goal_msg = FollowJointTrajectory.Goal()
+        goal_msg.trajectory.joint_names = self.joint_names
+        
+        point = JointTrajectoryPoint()
+        point.positions = target
+        point.velocities = [0.0] * 6
+        point.time_from_start = Duration(sec=int(duration), nanosec=int((duration % 1) * 1e9))
+        goal_msg.trajectory.points = [point]
+        
+        future = self._action_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        
+        goal_handle = future.result()
+        if not goal_handle or not goal_handle.accepted:
+            return False
+        
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=duration + 10)
+        
+        return True
+    
+    def collect_samples(self) -> Tuple[np.ndarray, np.ndarray]:
+        """在当前位置收集样本"""
+        positions = []
+        efforts = []
+        
+        for _ in range(self.config.samples_per_config):
+            rclpy.spin_once(self, timeout_sec=self.config.sample_interval)
+            positions.append(self.current_positions.copy())
+            efforts.append(self.current_efforts.copy())
+            time.sleep(self.config.sample_interval)
+        
+        return np.mean(positions, axis=0), np.mean(efforts, axis=0)
+    
+    def generate_test_configurations(self, mode: str = 'full') -> List[List[float]]:
+        """生成测试配置点
+        
+        Args:
+            mode: 'quick' - 快速模式(~20点), 'full' - 完整模式(~46点), 
+                  'high' - 高精度(~80点), 'ultra' - 超高精度(~120点)
+        """
+        configs = []
+        home = np.array(self.config.home_position)
+        
+        if mode == 'quick':
+            # 快速模式：约20个测试点
+            l2_range = np.linspace(0.4, 1.4, 6)
+            l3_range = np.linspace(-1.2, -0.4, 5)
+            l4_range = np.array([0.3, 0.7, 1.0])
+            l5_range = np.array([0.3, 0.6])
+            grid_step = 2
+        elif mode == 'high':
+            # 高精度模式：约80个测试点
+            l2_range = np.linspace(0.25, 1.55, 12)
+            l3_range = np.linspace(-1.35, -0.25, 12)
+            l4_range = np.linspace(0.25, 1.25, 7)
+            l5_range = np.linspace(0.25, 1.05, 5)
+            grid_step = 2
+        elif mode == 'ultra':
+            # 超高精度模式：约120个测试点
+            l2_range = np.linspace(0.2, 1.6, 15)
+            l3_range = np.linspace(-1.4, -0.2, 15)
+            l4_range = np.linspace(0.2, 1.3, 8)
+            l5_range = np.linspace(0.2, 1.1, 6)
+            grid_step = 2
+        else:
+            # 完整模式：约46个测试点
+            l2_range = np.linspace(0.3, 1.5, 10)
+            l3_range = np.linspace(-1.3, -0.3, 10)
+            l4_range = np.linspace(0.3, 1.2, 6)
+            l5_range = np.linspace(0.3, 1.0, 5)
+            grid_step = 2
+        
+        # 第一阶段：L2 单独变化
+        self.get_logger().info('生成 L2 测试点...')
+        for l2 in l2_range:
+            cfg = home.copy()
+            cfg[1] = l2
+            configs.append(cfg.tolist())
+        
+        # 第二阶段：L3 单独变化
+        self.get_logger().info('生成 L3 测试点...')
+        for l3 in l3_range:
+            cfg = home.copy()
+            cfg[2] = l3
+            configs.append(cfg.tolist())
+        
+        # 第三阶段：L2+L3 网格组合
+        self.get_logger().info('生成 L2+L3 组合测试点...')
+        l2_grid = l2_range[::grid_step]
+        l3_grid = l3_range[::grid_step]
+        for l2 in l2_grid:
+            for l3 in l3_grid:
+                cfg = home.copy()
+                cfg[1] = l2
+                cfg[2] = l3
+                configs.append(cfg.tolist())
+        
+        # 第四阶段：L4+L5 组合变化
+        self.get_logger().info('生成 L4+L5 组合测试点...')
+        for l4 in l4_range:
+            for l5 in l5_range:
+                cfg = home.copy()
+                cfg[3] = l4
+                cfg[4] = l5
+                configs.append(cfg.tolist())
+        
+        # 去重
+        unique_configs = []
+        for cfg in configs:
+            is_dup = False
+            for uc in unique_configs:
+                if np.allclose(cfg, uc, atol=0.05):
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique_configs.append(cfg)
+        
+        self.get_logger().info(f'总计 {len(unique_configs)} 个测试点')
+        return unique_configs
+    
+    def compute_gravity_with_params(self, q: np.ndarray, params: np.ndarray) -> np.ndarray:
+        """使用给定的惯性参数计算重力力矩"""
+        if self.model is None:
+            return np.zeros(6)
+        
+        # 临时修改模型的惯性参数
+        # params 格式: [L2_mass, L2_com_x, L3_mass, L3_com_x, L3_com_y, 
+        #               L4_mass, L4_com_x, L4_com_y, L5_mass, L5_com_z, L6_mass, L6_com_z]
+        
+        # 保存原始值
+        original_inertias = []
+        for i in range(1, min(7, self.model.nbodies)):
+            original_inertias.append({
+                'mass': self.model.inertias[i].mass,
+                'lever': self.model.inertias[i].lever.copy()
+            })
+        
+        # 应用新参数
+        try:
+            # L2 (index 2 in model)
+            if len(params) > 0:
+                self.model.inertias[2].mass = params[0]
+            if len(params) > 1:
+                self.model.inertias[2].lever[0] = params[1]
+            
+            # L3 (index 3 in model)
+            if len(params) > 2:
+                self.model.inertias[3].mass = params[2]
+            if len(params) > 3:
+                self.model.inertias[3].lever[0] = params[3]
+            if len(params) > 4:
+                self.model.inertias[3].lever[1] = params[4]
+            
+            # L4 (index 4 in model)
+            if len(params) > 5:
+                self.model.inertias[4].mass = params[5]
+            if len(params) > 6:
+                self.model.inertias[4].lever[0] = params[6]
+            if len(params) > 7:
+                self.model.inertias[4].lever[1] = params[7]
+            
+            # L5 (index 5 in model)
+            if len(params) > 8:
+                self.model.inertias[5].mass = params[8]
+            if len(params) > 9:
+                self.model.inertias[5].lever[2] = params[9]
+            
+            # L6 (index 6 in model)
+            if len(params) > 10:
+                self.model.inertias[6].mass = params[10]
+            if len(params) > 11:
+                self.model.inertias[6].lever[2] = params[11]
+            
+            # 重新创建 data
+            self.data = pin.Data(self.model)
+            
+            # 计算重力力矩
+            q_pin = np.array(q[:self.model.nq])
+            v = np.zeros(self.model.nv)
+            a = np.zeros(self.model.nv)
+            tau = pin.rnea(self.model, self.data, q_pin, v, a)
+            
+        finally:
+            # 恢复原始值
+            for i, orig in enumerate(original_inertias):
+                self.model.inertias[i + 1].mass = orig['mass']
+                self.model.inertias[i + 1].lever = orig['lever']
+            self.data = pin.Data(self.model)
+        
+        return tau[:6]
+    
+    def objective_function(self, params: np.ndarray) -> float:
+        """优化目标函数：测量力矩与预测力矩的均方误差"""
+        total_error = 0.0
+        
+        for positions, measured_efforts in self.calibration_data:
+            predicted = self.compute_gravity_with_params(positions, params)
+            
+            # 只计算 L2-L6 的误差（L1 绕 Z 轴，不受重力影响）
+            for i in range(1, 6):
+                error = measured_efforts[i] - predicted[i]
+                total_error += error ** 2
+        
+        return total_error
+    
+    def run_calibration(self, mode: str = 'full') -> Dict:
+        """运行完整的标定流程
+        
+        Args:
+            mode: 'quick', 'full', 'high', 'ultra'
+        """
+        mode_names = {'quick': '快速', 'full': '完整', 'high': '高精度', 'ultra': '超高精度'}
+        self.get_logger().info('=' * 60)
+        self.get_logger().info(f'  RS-A3 惯性参数标定程序 ({mode_names.get(mode, mode)}模式)')
+        self.get_logger().info('=' * 60)
+        
+        if self.model is None:
+            self.get_logger().error('Pinocchio 模型未初始化')
+            return {}
+        
+        # 等待关节状态
+        self.get_logger().info('等待关节状态...')
+        start = time.time()
+        while not self.state_received and (time.time() - start) < 10:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        
+        if not self.state_received:
+            self.get_logger().error('无法获取关节状态')
+            return {}
+        
+        # 生成测试配置
+        test_configs = self.generate_test_configurations(mode)
+        
+        # 收集数据
+        self.get_logger().info(f'\n开始数据采集 ({len(test_configs)} 个测试点)...')
+        self.calibration_data.clear()
+        
+        for idx, config in enumerate(test_configs):
+            self.get_logger().info(f'\n[{idx+1}/{len(test_configs)}] 目标: L2={config[1]:.2f}, L3={config[2]:.2f}, L4={config[3]:.2f}, L5={config[4]:.2f}')
+            
+            if not self.move_to_position(config):
+                self.get_logger().warn('  移动失败，跳过')
+                continue
+            
+            time.sleep(self.config.settle_time)
+            
+            positions, efforts = self.collect_samples()
+            self.calibration_data.append((positions, efforts))
+            
+            self.get_logger().info(f'  实际: L2={positions[1]:.3f}, L3={positions[2]:.3f}')
+            self.get_logger().info(f'  力矩: L2={efforts[1]:.4f}, L3={efforts[2]:.4f}, L4={efforts[3]:.4f}')
+        
+        # 回到 home
+        self.get_logger().info('\n回到 Home 位置...')
+        self.move_to_position(self.config.home_position)
+        
+        if len(self.calibration_data) < 10:
+            self.get_logger().error('数据点太少，无法标定')
+            return {}
+        
+        # 优化拟合
+        self.get_logger().info('\n' + '=' * 60)
+        self.get_logger().info('  优化拟合惯性参数')
+        self.get_logger().info('=' * 60)
+        
+        # 初始值（从 URDF 默认值）
+        initial_params = np.array([
+            0.8348, 0.095,      # L2: mass, com_x
+            0.1976, -0.056, 0.049,  # L3: mass, com_x, com_y
+            0.4606, -0.024, 0.031,  # L4: mass, com_x, com_y
+            0.0180, 0.018,      # L5: mass, com_z
+            0.5313, 0.070       # L6: mass, com_z
+        ])
+        
+        # 参数边界
+        bounds = [
+            (0.1, 2.0), (-0.2, 0.2),     # L2
+            (0.05, 0.5), (-0.15, 0.0), (0.0, 0.1),  # L3
+            (0.1, 1.0), (-0.1, 0.0), (0.0, 0.1),   # L4
+            (0.005, 0.1), (0.0, 0.05),   # L5
+            (0.1, 1.0), (0.0, 0.15)      # L6
+        ]
+        
+        self.get_logger().info('初始参数:')
+        self.get_logger().info(f'  L2: mass={initial_params[0]:.4f}, com_x={initial_params[1]:.4f}')
+        self.get_logger().info(f'  L3: mass={initial_params[2]:.4f}, com_x={initial_params[3]:.4f}, com_y={initial_params[4]:.4f}')
+        self.get_logger().info(f'  L4: mass={initial_params[5]:.4f}, com_x={initial_params[6]:.4f}, com_y={initial_params[7]:.4f}')
+        self.get_logger().info(f'  L5: mass={initial_params[8]:.4f}, com_z={initial_params[9]:.4f}')
+        self.get_logger().info(f'  L6: mass={initial_params[10]:.4f}, com_z={initial_params[11]:.4f}')
+        
+        initial_error = self.objective_function(initial_params)
+        self.get_logger().info(f'\n初始误差: {initial_error:.6f}')
+        
+        # 优化
+        self.get_logger().info('开始优化...')
+        result = minimize(
+            self.objective_function,
+            initial_params,
+            method='L-BFGS-B',
+            bounds=bounds,
+            options={'maxiter': 500, 'disp': False}
+        )
+        
+        optimized_params = result.x
+        final_error = result.fun
+        
+        self.get_logger().info(f'优化完成! 最终误差: {final_error:.6f} (降低 {(1 - final_error/initial_error)*100:.1f}%)')
+        
+        # 计算 RMSE 和 R²
+        n_samples = len(self.calibration_data) * 5  # L2-L6
+        rmse = np.sqrt(final_error / n_samples)
+        
+        # 计算 SS_tot
+        all_measured = []
+        for _, efforts in self.calibration_data:
+            all_measured.extend(efforts[1:6])
+        mean_measured = np.mean(all_measured)
+        ss_tot = sum((m - mean_measured) ** 2 for m in all_measured)
+        r_squared = 1 - final_error / ss_tot if ss_tot > 0 else 0
+        
+        self.get_logger().info(f'RMSE: {rmse:.4f} Nm')
+        self.get_logger().info(f'R²: {r_squared:.4f}')
+        
+        # 整理结果
+        results = {
+            'L2': {'mass': float(optimized_params[0]), 'com': [float(optimized_params[1]), 0.0, 0.0]},
+            'L3': {'mass': float(optimized_params[2]), 'com': [float(optimized_params[3]), float(optimized_params[4]), 0.003]},
+            'L4': {'mass': float(optimized_params[5]), 'com': [float(optimized_params[6]), float(optimized_params[7]), 0.0]},
+            'L5': {'mass': float(optimized_params[8]), 'com': [0.004, 0.0, float(optimized_params[9])]},
+            'L6': {'mass': float(optimized_params[10]), 'com': [0.0, -0.001, float(optimized_params[11])]},
+            'calibration_info': {
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'num_samples': len(self.calibration_data),
+                'rmse': float(rmse),
+                'r_squared': float(r_squared)
+            }
+        }
+        
+        self.get_logger().info('\n优化后参数:')
+        for joint in ['L2', 'L3', 'L4', 'L5', 'L6']:
+            p = results[joint]
+            self.get_logger().info(f'  {joint}: mass={p["mass"]:.4f}, com={p["com"]}')
+        
+        return results
+    
+    def save_results(self, results: Dict, output_path: str):
+        """保存标定结果到 YAML 文件"""
+        yaml_content = f"""# RS-A3 机械臂惯性参数配置文件
+# 用于 Pinocchio 重力补偿计算
+# 这些参数通过标定程序拟合得到，覆盖 URDF 默认值
+#
+# 标定日期: {results['calibration_info']['date']}
+# 标定程序: scripts/inertia_calibration.py
+# RMSE: {results['calibration_info']['rmse']:.4f} Nm
+# R²: {results['calibration_info']['r_squared']:.4f}
+
+# 是否启用标定后的惯性参数
+use_calibrated_params: true
+
+# 各连杆惯性参数
+inertia_params:
+  # L2 - 大臂
+  L2:
+    mass: {results['L2']['mass']:.4f}
+    com: {results['L2']['com']}
+  
+  # L3 - 小臂
+  L3:
+    mass: {results['L3']['mass']:.4f}
+    com: {results['L3']['com']}
+  
+  # L4 - 腕部 roll
+  L4:
+    mass: {results['L4']['mass']:.4f}
+    com: {results['L4']['com']}
+  
+  # L5 - 腕部 pitch
+  L5:
+    mass: {results['L5']['mass']:.4f}
+    com: {results['L5']['com']}
+  
+  # L6 - 末端 yaw
+  L6:
+    mass: {results['L6']['mass']:.4f}
+    com: {results['L6']['com']}
+
+# 标定统计信息
+calibration_info:
+  date: "{results['calibration_info']['date']}"
+  num_samples: {results['calibration_info']['num_samples']}
+  rmse: {results['calibration_info']['rmse']:.4f}
+  r_squared: {results['calibration_info']['r_squared']:.4f}
+"""
+        
+        with open(output_path, 'w') as f:
+            f.write(yaml_content)
+        
+        self.get_logger().info(f'\n结果已保存到: {output_path}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='RS-A3 惯性参数标定')
+    parser.add_argument('--quick', action='store_true', help='快速模式（~20个测试点）')
+    parser.add_argument('--high', action='store_true', help='高精度模式（~80个测试点）')
+    parser.add_argument('--ultra', action='store_true', help='超高精度模式（~120个测试点）')
+    parser.add_argument('--samples', type=int, default=40, help='每个测试点采样次数（默认40）')
+    parser.add_argument('--output', type=str, 
+                        default='/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml',
+                        help='输出配置文件路径')
+    parser.add_argument('--urdf', type=str,
+                        default='/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf',
+                        help='URDF 文件路径')
+    
+    args = parser.parse_args()
+    
+    # 确定模式
+    if args.ultra:
+        mode = 'ultra'
+    elif args.high:
+        mode = 'high'
+    elif args.quick:
+        mode = 'quick'
+    else:
+        mode = 'full'
+    
+    if not PINOCCHIO_AVAILABLE:
+        return
+    
+    rclpy.init()
+    
+    config = CalibrationConfig(
+        urdf_path=args.urdf,
+        output_path=args.output,
+        samples_per_config=args.samples
+    )
+    
+    calibrator = InertiaCalibrator(config)
+    
+    try:
+        results = calibrator.run_calibration(mode=mode)
+        
+        if results:
+            calibrator.save_results(results, args.output)
+            print("\n" + "=" * 60)
+            print("  标定完成!")
+            print("  请重启控制器以应用新参数")
+            print("=" * 60)
+        else:
+            print("\n标定失败")
+    
+    except KeyboardInterrupt:
+        print("\n标定被中断")
+    
+    finally:
+        calibrator.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

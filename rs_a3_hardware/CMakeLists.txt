@@ -15,6 +15,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
+# Pinocchio for dynamics computation
+find_package(pinocchio REQUIRED)
+
 # Include directories
 include_directories(include)
 
@@ -39,6 +42,9 @@ ament_target_dependencies(${PROJECT_NAME}
   std_msgs
   std_srvs
 )
+
+# Link Pinocchio
+target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 
 # Export plugin
 pluginlib_export_plugin_description_file(hardware_interface rs_a3_hardware_plugin.xml)

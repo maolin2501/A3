@@ -23,7 +23,8 @@
 ### 主要特性
 
 - **S曲线轨迹规划**: 标准7段S曲线速度规划，实现平滑无冲击运动
-- **重力补偿**: 支持关节重力前馈补偿，提升运动精度
+- **Pinocchio 动力学重力补偿**: 基于完整动力学模型的重力补偿，考虑所有关节级联效应
+- **惯性参数自动标定**: 通过多点采样自动拟合各连杆惯性参数，实现精确拖动示教
 - **速度前馈**: 位置差分计算速度前馈，配合低通滤波减少运动抖动
 - **关节限位保护**: 软限位减速+硬限位停止，保护机械臂安全
 - **实时笛卡尔控制**: 50Hz Xbox手柄笛卡尔空间实时遥控
@@ -303,7 +304,57 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 | L5 | 0.3 | 腕部Pitch |
 | L6 | 0.0 | 腕部Yaw |
 
-重力补偿公式: `τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio`
+重力补偿公式 (简化模型): `τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio`
+
+### Pinocchio 动力学重力补偿
+
+系统支持基于 Pinocchio 库的完整动力学重力补偿，通过 RNEA 算法计算考虑所有关节级联效应的重力力矩。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `use_pinocchio_gravity` | true | 启用 Pinocchio 完整动力学重力补偿 |
+| `urdf_path` | rs_a3.urdf | URDF 文件路径 |
+| `inertia_config_path` | inertia_params.yaml | 标定后的惯性参数配置文件 |
+| `zero_torque_kd` | 0.1 | 零力矩模式阻尼系数 |
+
+### 零力矩模式（拖动示教）
+
+零力矩模式下，位置控制 Kp=0，仅保留阻尼和重力补偿，允许手动拖动机械臂：
+
+```bash
+# 启用零力矩模式
+ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+
+# 关闭零力矩模式
+ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
+```
+
+### 惯性参数标定
+
+系统提供自动惯性参数标定程序，通过在多个关节配置下采集力矩数据，拟合各连杆的质量和质心位置：
+
+```bash
+# 快速标定 (~20个测试点，约3分钟)
+python3 scripts/inertia_calibration.py --quick
+
+# 完整标定 (~46个测试点，约10分钟)
+python3 scripts/inertia_calibration.py
+
+# 高精度标定 (~80个测试点，约20分钟)
+python3 scripts/inertia_calibration.py --high
+
+# 超高精度标定 (~120个测试点，约35分钟)
+python3 scripts/inertia_calibration.py --ultra --samples 60
+```
+
+标定结果保存在 `rs_a3_description/config/inertia_params.yaml`，重启控制器后自动加载。
+
+**标定参数 (L2-L6):**
+- L2: 大臂，主要承重关节
+- L3: 小臂
+- L4: 腕部 Roll
+- L5: 腕部 Pitch  
+- L6: 末端 Yaw
 
 ### 控制器参数 (`rs_a3_controllers.yaml`)
 
@@ -633,4 +684,4 @@ Apache-2.0
 
 ---
 
-**最后更新**: 2026-01-20
+**最后更新**: 2026-01-23
