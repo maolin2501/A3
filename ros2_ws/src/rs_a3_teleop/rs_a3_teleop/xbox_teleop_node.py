@@ -17,6 +17,8 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Joy
+import socket
+import struct
 from geometry_msgs.msg import PoseStamped, Pose
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
 from moveit_msgs.msg import (
@@ -144,6 +146,25 @@ class XboxTeleopNode(Node):
         self.last_b_button = 0
         self.last_x_button = 0
         self.is_going_home = False  # 是否正在回home/zero
+        
+        # 方向键控制夹爪电机（ID=7）
+        self.last_dpad_up = 0
+        self.last_dpad_down = 0
+        self.gripper_torque = 0.0  # 当前夹爪力矩
+        self.gripper_torque_step = 0.4  # 每次按键增加的力矩 (Nm)
+        self.gripper_motor_id = 7
+        
+        # 初始化CAN socket用于直接发送夹爪命令
+        self.can_socket = None
+        self.gripper_enabled = False
+        try:
+            self.can_socket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+            self.can_socket.bind(('can0',))
+            self.get_logger().info('CAN socket初始化成功，夹爪控制已启用')
+            # 使能夹爪电机
+            self.enable_gripper_motor()
+        except Exception as e:
+            self.get_logger().warn(f'CAN socket初始化失败，夹爪控制禁用: {e}')
         
         # 输入平滑滤波器状态（指数移动平均）
         self.smoothed_vx = 0.0  # 平滑后的X速度
@@ -744,6 +765,35 @@ class XboxTeleopNode(Node):
         if x_button == 1 and self.last_x_button == 0:
             self.go_zero()
         self.last_x_button = x_button
+        
+        # 处理方向键 - 控制夹爪电机(ID=7)力矩
+        # Xbox手柄方向键: axes[6]=左右, axes[7]=上下 (上=1, 下=-1)
+        if len(joy.axes) >= 8 and self.can_socket is not None:
+            dpad_vertical = joy.axes[7]  # 上=1, 下=-1
+            
+            # 方向键上 - 增加力矩
+            dpad_up = 1 if dpad_vertical > 0.5 else 0
+            if dpad_up == 1 and self.last_dpad_up == 0:
+                self.gripper_torque = self.gripper_torque_step
+                self.send_gripper_torque(self.gripper_torque)
+                self.get_logger().info(f'夹爪力矩: +{self.gripper_torque:.2f} Nm')
+            elif dpad_up == 0 and self.last_dpad_up == 1:
+                # 松开按键时发送0力矩
+                self.gripper_torque = 0.0
+                self.send_gripper_torque(0.0)
+            self.last_dpad_up = dpad_up
+            
+            # 方向键下 - 减少力矩
+            dpad_down = 1 if dpad_vertical < -0.5 else 0
+            if dpad_down == 1 and self.last_dpad_down == 0:
+                self.gripper_torque = -self.gripper_torque_step
+                self.send_gripper_torque(self.gripper_torque)
+                self.get_logger().info(f'夹爪力矩: {self.gripper_torque:.2f} Nm')
+            elif dpad_down == 0 and self.last_dpad_down == 1:
+                # 松开按键时发送0力矩
+                self.gripper_torque = 0.0
+                self.send_gripper_torque(0.0)
+            self.last_dpad_down = dpad_down
             
         # 如果正在回home/zero，跳过普通运动控制
         if self.is_going_home:
@@ -1072,9 +1122,9 @@ class XboxTeleopNode(Node):
             self.get_logger().error(f'IK回调异常: {e}')
     
     def smooth_joint_positions(self, target_positions):
-        """对IK输出的关节位置进行平滑滤波
+        """对IK输出的关节位置进行平滑滤波（改进版：临界阻尼+死区）
         
-        使用一阶低通滤波 + 速度限制 + 加速度限制，避免关节跳变导致的机械冲击。
+        使用临界阻尼设计 + 位置死区 + 非对称减速，避免关节跳变和静止震荡。
         
         Args:
             target_positions: IK解出的目标关节位置列表
@@ -1097,17 +1147,39 @@ class XboxTeleopNode(Node):
         alpha = self.joint_smoothing_alpha
         max_delta_v = self.max_joint_acceleration * self.dt  # 单周期最大速度变化量
         
+        # 【新增】位置误差死区（小于此值视为到达目标）
+        position_deadzone = 0.0005  # 0.5mrad ≈ 0.03度
+        
         for i in range(len(target_positions)):
-            # 一阶低通滤波
-            filtered_pos = alpha * target_positions[i] + (1 - alpha) * self.smoothed_joint_positions[i]
+            pos_error = target_positions[i] - self.smoothed_joint_positions[i]
+            current_velocity = self.last_joint_velocities[i]
             
-            # 计算期望速度
-            desired_velocity = (filtered_pos - self.smoothed_joint_positions[i]) / self.dt
+            # 【改进1】位置死区：误差极小且速度极小时直接归零
+            if abs(pos_error) < position_deadzone and abs(current_velocity) < 0.01:
+                smoothed.append(self.smoothed_joint_positions[i])
+                new_velocities.append(0.0)
+                continue
             
-            # 加速度限制（限制速度变化率）
-            velocity_change = desired_velocity - self.last_joint_velocities[i]
-            if abs(velocity_change) > max_delta_v:
-                desired_velocity = self.last_joint_velocities[i] + max_delta_v * (1 if velocity_change > 0 else -1)
+            # 【改进2】临界阻尼设计：desired_velocity考虑当前速度
+            # 使用类似PD控制：v_desired = Kp * pos_error - Kd * current_velocity
+            # 这里 Kp 对应 alpha/dt，Kd 是阻尼系数
+            damping = 0.7  # 阻尼系数，0.7接近临界阻尼
+            
+            # 期望速度 = 位置误差项 - 阻尼项
+            desired_velocity = alpha * pos_error / self.dt - damping * current_velocity
+            
+            # 【改进3】非对称加速度限制：减速时允许2倍加速度（快速停止）
+            velocity_change = desired_velocity - current_velocity
+            is_decelerating = (current_velocity * desired_velocity < 0) or \
+                              (abs(desired_velocity) < abs(current_velocity))
+            
+            if is_decelerating:
+                effective_max_delta_v = max_delta_v * 2.0  # 减速时加速度翻倍
+            else:
+                effective_max_delta_v = max_delta_v
+            
+            if abs(velocity_change) > effective_max_delta_v:
+                desired_velocity = current_velocity + effective_max_delta_v * (1 if velocity_change > 0 else -1)
             
             # 速度限制
             if abs(desired_velocity) > self.max_joint_velocity:
@@ -1306,6 +1378,87 @@ class XboxTeleopNode(Node):
         except Exception as e:
             self.get_logger().error(f'执行结果回调异常: {e}')
             self.is_moving = False
+
+
+    def enable_gripper_motor(self):
+        """使能夹爪电机(ID=7)"""
+        if self.can_socket is None:
+            return False
+        
+        try:
+            motor_id = self.gripper_motor_id  # 7
+            host_can_id = 253  # 0xFD - 主机CAN ID
+            comm_type = 3  # 通信类型3：电机使能运行
+            
+            # 构建29位扩展CAN ID: (comm_type << 24) | (host_can_id << 8) | motor_id
+            can_id = (comm_type << 24) | (host_can_id << 8) | motor_id
+            can_id |= 0x80000000  # 设置扩展帧标志
+            
+            # 构建8字节数据（全0）
+            data = bytes(8)
+            
+            # 构建CAN帧
+            frame = struct.pack('=IB3x8s', can_id, 8, data)
+            
+            # 发送
+            self.can_socket.send(frame)
+            self.gripper_enabled = True
+            self.get_logger().info(f'夹爪电机(ID={motor_id})已使能')
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f'使能夹爪电机失败: {e}')
+            return False
+
+    def send_gripper_torque(self, torque):
+        """
+        发送力矩命令到夹爪电机(ID=7)
+        position=0, velocity=0, kp=0, kd=0, torque=指定值
+        """
+        if self.can_socket is None:
+            return False
+        
+        try:
+            motor_id = self.gripper_motor_id
+            
+            # RS05电机参数范围
+            P_MIN, P_MAX = -12.57, 12.57  # rad
+            V_MIN, V_MAX = -50.0, 50.0    # rad/s
+            KP_MIN, KP_MAX = 0.0, 500.0
+            KD_MIN, KD_MAX = 0.0, 5.0
+            T_MIN, T_MAX = -12.0, 12.0    # Nm
+            
+            # 转换函数
+            def float_to_uint16(x, x_min, x_max):
+                x = max(x_min, min(x_max, x))
+                return int((x - x_min) * 65535.0 / (x_max - x_min))
+            
+            # 计算原始值 (position=0, velocity=0, kp=0, kd=0)
+            pos_raw = float_to_uint16(0.0, P_MIN, P_MAX)
+            vel_raw = float_to_uint16(0.0, V_MIN, V_MAX)
+            kp_raw = float_to_uint16(0.0, KP_MIN, KP_MAX)
+            kd_raw = float_to_uint16(0.0, KD_MIN, KD_MAX)
+            torque_raw = float_to_uint16(torque, T_MIN, T_MAX)
+            
+            # 构建29位扩展CAN ID
+            # 通信类型1（运控模式），torque在bit23~8，motor_id在bit7~0
+            comm_type = 1
+            can_id = (comm_type << 24) | (torque_raw << 8) | motor_id
+            can_id |= 0x80000000  # 设置扩展帧标志
+            
+            # 构建8字节数据
+            data = struct.pack('>HHHH', pos_raw, vel_raw, kp_raw, kd_raw)
+            
+            # 构建CAN帧
+            frame = struct.pack('=IB3x8s', can_id, 8, data)
+            
+            # 发送
+            self.can_socket.send(frame)
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f'发送夹爪命令失败: {e}')
+            return False
 
 
 def main(args=None):

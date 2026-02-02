@@ -88,6 +88,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   hw_positions_.resize(num_joints, 0.0);
   hw_velocities_.resize(num_joints, 0.0);
   hw_efforts_.resize(num_joints, 0.0);
+  hw_temperatures_.resize(num_joints, 0.0);
   hw_commands_positions_.resize(num_joints, 0.0);
   hw_commands_velocities_.resize(num_joints, 0.0);
   hw_commands_efforts_.resize(num_joints, 0.0);
@@ -190,9 +191,10 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   smoothed_cmd_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/smoothed_command", 10);
   gravity_torque_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/gravity_torque", 10);
   velocity_ff_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/velocity_feedforward", 10);
+  temperature_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/motor_temperature", 10);
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Debug publishers created: /debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, /debug/velocity_feedforward");
+              "Debug publishers created: /debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, /debug/velocity_feedforward, /debug/motor_temperature");
 
   // ============ 初始化重力补偿参数 ============
   gravity_params_.resize(num_joints);
@@ -637,6 +639,10 @@ std::vector<hardware_interface::StateInterface> RsA3HardwareInterface::export_st
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         joint_configs_[i].name, hardware_interface::HW_IF_EFFORT, &hw_efforts_[i]));
+    // 添加温度状态接口
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        joint_configs_[i].name, "temperature", &hw_temperatures_[i]));
   }
   
   return state_interfaces;
@@ -677,6 +683,7 @@ hardware_interface::return_type RsA3HardwareInterface::read(
         hw_positions_[i] = (feedback.position - config.position_offset) * config.direction;
         hw_velocities_[i] = feedback.velocity * config.direction;
         hw_efforts_[i] = feedback.torque * config.direction;
+        hw_temperatures_[i] = feedback.temperature;  // 电机温度 (°C)
       }
     }
   } else {
@@ -685,7 +692,21 @@ hardware_interface::return_type RsA3HardwareInterface::read(
       hw_positions_[i] = smoothed_positions_[i];
       hw_velocities_[i] = smoothed_velocities_[i];
       hw_efforts_[i] = 0.0;
+      hw_temperatures_[i] = 25.0;  // Mock 温度
     }
+  }
+  
+  // 发布温度数据（降低频率，每 50 次读取发布一次）
+  static int temp_pub_counter = 0;
+  if (++temp_pub_counter >= 50) {
+    temp_pub_counter = 0;
+    sensor_msgs::msg::JointState temp_msg;
+    temp_msg.header.stamp = debug_node_->now();
+    for (size_t i = 0; i < joint_configs_.size(); ++i) {
+      temp_msg.name.push_back(joint_configs_[i].name);
+      temp_msg.effort.push_back(hw_temperatures_[i]);  // 使用 effort 字段存储温度
+    }
+    temperature_pub_->publish(temp_msg);
   }
 
   return hardware_interface::return_type::OK;

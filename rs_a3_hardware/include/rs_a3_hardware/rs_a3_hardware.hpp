@@ -108,6 +108,7 @@ private:
   std::vector<double> hw_positions_;
   std::vector<double> hw_velocities_;
   std::vector<double> hw_efforts_;
+  std::vector<double> hw_temperatures_;  // 电机温度 (°C)
   
   // Command interfaces data
   std::vector<double> hw_commands_positions_;
@@ -237,6 +238,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr smoothed_cmd_pub_; // 平滑后发给电机的命令
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gravity_torque_pub_; // 重力补偿力矩
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr velocity_ff_pub_;  // 速度前馈（实际发给电机的）
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr temperature_pub_;  // 电机温度
   
   // ============ 关节限位保护 ============
   double limit_margin_;           // 限位边界距离 (rad)，开始减速的距离
