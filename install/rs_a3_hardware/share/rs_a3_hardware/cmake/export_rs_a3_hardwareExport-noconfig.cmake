@@ -12,8 +12,8 @@ set_target_properties(rs_a3_hardware::rs_a3_hardware PROPERTIES
   IMPORTED_SONAME_NOCONFIG "librs_a3_hardware.so"
   )
 
-list(APPEND _IMPORT_CHECK_TARGETS rs_a3_hardware::rs_a3_hardware )
-list(APPEND _IMPORT_CHECK_FILES_FOR_rs_a3_hardware::rs_a3_hardware "${_IMPORT_PREFIX}/lib/librs_a3_hardware.so" )
+list(APPEND _cmake_import_check_targets rs_a3_hardware::rs_a3_hardware )
+list(APPEND _cmake_import_check_files_for_rs_a3_hardware::rs_a3_hardware "${_IMPORT_PREFIX}/lib/librs_a3_hardware.so" )
 
 # Commands beyond this point should not need to know the version.
 set(CMAKE_IMPORT_FILE_VERSION)

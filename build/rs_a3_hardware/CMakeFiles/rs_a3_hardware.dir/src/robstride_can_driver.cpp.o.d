@@ -1,7 +1,7 @@
 CMakeFiles/rs_a3_hardware.dir/src/robstride_can_driver.cpp.o: \
- /home/wy/RS/A3/rs_a3_hardware/src/robstride_can_driver.cpp \
+ /home/ubuntu/rs_arm/src/rs_a3_hardware/src/robstride_can_driver.cpp \
  /usr/include/stdc-predef.h \
- /home/wy/RS/A3/rs_a3_hardware/include/rs_a3_hardware/robstride_can_driver.hpp \
+ /home/ubuntu/rs_arm/src/rs_a3_hardware/include/rs_a3_hardware/robstride_can_driver.hpp \
  /usr/include/c++/11/cstdint \
  /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h \
  /usr/include/x86_64-linux-gnu/c++/11/bits/os_defines.h \

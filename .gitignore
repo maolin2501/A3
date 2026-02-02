@@ -1,7 +1,7 @@
 # ROS2 编译产物
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
+build/
+install/
+log/
 
 # Python
 __pycache__/
