@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/ubuntu/rs_arm/build/rs_a3_hardware/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
