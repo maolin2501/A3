@@ -6,8 +6,10 @@
 #ifndef RS_A3_HARDWARE__RS_A3_HARDWARE_HPP_
 #define RS_A3_HARDWARE__RS_A3_HARDWARE_HPP_
 
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "hardware_interface/handle.hpp"
@@ -156,7 +158,9 @@ private:
   // ============ 零力矩模式与重力补偿 ============
   // 零力矩模式标志
   bool zero_torque_mode_;           // 是否启用零力矩模式
-  double zero_torque_kd_;           // 零力矩模式的阻尼系数
+  double zero_torque_kd_;           // 零力矩模式的默认阻尼系数
+  std::vector<double> zero_torque_kp_joints_;  // 零力矩模式关节独立 Kp
+  std::vector<double> zero_torque_kd_joints_;  // 零力矩模式关节独立 Kd
   
   // 重力补偿参数 (每个关节: τ = sin_coeff * sin(θ) + cos_coeff * cos(θ) + offset)
   struct GravityCompParams {
@@ -234,6 +238,8 @@ private:
   
   // 调试发布器
   rclcpp::Node::SharedPtr debug_node_;
+  std::thread spin_thread_;                 // 用于处理服务回调的线程
+  std::atomic<bool> spin_thread_running_;   // 线程运行标志
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr hw_cmd_pub_;      // 控制器发来的命令
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr smoothed_cmd_pub_; // 平滑后发给电机的命令
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gravity_torque_pub_; // 重力补偿力矩

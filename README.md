@@ -12,6 +12,7 @@
 - [快速开始](#快速开始)
 - [控制参数](#控制参数)
 - [ROS2 接口](#ros2-接口)
+- [控制 API](#控制-api)
 - [电机通信协议](#电机通信协议)
 - [故障排除](#故障排除)
 - [目录结构](#目录结构)
@@ -324,7 +325,19 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 
 ### 零力矩模式（拖动示教）
 
-零力矩模式下，位置控制 Kp=0，仅保留阻尼和重力补偿，允许手动拖动机械臂：
+零力矩模式下，位置控制 Kp=0，仅保留阻尼和重力补偿，允许手动拖动机械臂进行示教。
+
+#### 工作原理
+
+| 模式 | Kp | Kd | 重力补偿 | 用途 |
+|------|----|----|----------|------|
+| 正常位置控制 | 80.0 | 4.0 | 50% | 精确位置跟踪 |
+| 零力矩模式 | 0 | 0.1~0.5 | 100% | 手动拖动示教 |
+
+#### ROS2 服务接口
+
+**服务名称**: `/rs_a3/set_zero_torque_mode`  
+**服务类型**: `std_srvs/srv/SetBool`
 
 ```bash
 # 启用零力矩模式
@@ -334,9 +347,70 @@ ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}
 ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
 ```
 
+#### Python 接口示例
+
+```python
+import rclpy
+from rclpy.node import Node
+from std_srvs.srv import SetBool
+
+def set_zero_torque_mode(enable: bool):
+    """启用或关闭零力矩模式"""
+    rclpy.init()
+    node = Node('zero_torque_client')
+    client = node.create_client(SetBool, '/rs_a3/set_zero_torque_mode')
+    
+    if not client.wait_for_service(timeout_sec=5.0):
+        node.get_logger().error('服务不可用')
+        return False
+    
+    request = SetBool.Request()
+    request.data = enable
+    
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+    
+    if future.done():
+        response = future.result()
+        print(f"成功: {response.success}, 消息: {response.message}")
+        return response.success
+    
+    node.destroy_node()
+    rclpy.shutdown()
+    return False
+
+# 使用示例
+set_zero_torque_mode(True)   # 启用
+set_zero_torque_mode(False)  # 关闭
+```
+
+#### 参数配置
+
+在 `rs_a3_ros2_control.xacro` 中配置阻尼系数：
+
+```xml
+<param name="zero_torque_kd">0.1</param>  <!-- 零力矩模式阻尼系数 -->
+```
+
+| 参数值 | 手感 | 适用场景 |
+|--------|------|----------|
+| 0.1 | 轻柔，几乎无阻力 | 精细示教、轻负载 |
+| 0.2~0.3 | 适中阻尼 | 一般示教 |
+| 0.5 | 明显阻力 | 安全优先、重负载 |
+
+#### 注意事项
+
+1. **启动顺序**: 先启动控制器，等待电机使能后再启用零力矩模式
+2. **重力补偿**: 零力矩模式依赖精确的重力补偿，建议先运行惯性参数标定
+3. **安全**: 零力矩模式下机械臂可自由移动，注意防止碰撞
+4. **关节限位**: 软限位保护仍然生效，接近限位时会有阻力
+5. **退出模式**: 关闭零力矩模式后，机械臂会保持当前位置
+
 ### 惯性参数标定
 
-系统提供自动惯性参数标定程序，通过在多个关节配置下采集力矩数据，拟合各连杆的质量和质心位置：
+系统提供自动惯性参数标定程序，通过在多个关节配置下采集力矩数据，拟合各连杆的质量和质心位置。
+
+#### 完整标定模式 (L2-L6)
 
 ```bash
 # 快速标定 (~20个测试点，约3分钟)
@@ -352,14 +426,55 @@ python3 scripts/inertia_calibration.py --high
 python3 scripts/inertia_calibration.py --ultra --samples 60
 ```
 
-标定结果保存在 `rs_a3_description/config/inertia_params.yaml`，重启控制器后自动加载。
+#### 腕部标定模式 (L4-L6)
 
-**标定参数 (L2-L6):**
-- L2: 大臂，主要承重关节
-- L3: 小臂
-- L4: 腕部 Roll
-- L5: 腕部 Pitch  
-- L6: 末端 Yaw
+当末端负载变化时（如更换夹爪），可只重新标定腕部关节，保留已标定的 L2/L3 参数：
+
+```bash
+# 腕部精细标定 (~65个测试点)
+python3 scripts/inertia_calibration.py --wrist
+
+# 腕部标定 + 增加采样次数
+python3 scripts/inertia_calibration.py --wrist --samples 60
+```
+
+#### 标定流程
+
+1. **启动控制器**: `ros2 launch rs_a3_description rs_a3_control.launch.py`
+2. **运行标定程序**: 程序会自动移动机械臂到各测试点采集数据
+3. **等待完成**: 标定完成后自动保存参数并返回 home 位置
+4. **重启控制器**: 重启后自动加载新参数
+
+#### 输出文件
+
+标定结果保存在 `rs_a3_description/config/inertia_params.yaml`：
+
+```yaml
+inertia_params:
+  L2:
+    mass: 1.1522        # 质量 (kg)
+    com: [0.077, 0.0, 0.0]  # 质心位置 (m)
+  L3:
+    mass: 0.1472
+    com: [-0.058, 0.002, 0.003]
+  # ... L4, L5, L6
+
+calibration_info:
+  date: "2026-01-23 18:42:27"
+  num_samples: 133
+  rmse: 0.0650          # 拟合误差 (Nm)
+  r_squared: 0.9909     # 拟合优度
+```
+
+#### 标定参数说明
+
+| 关节 | 说明 | 主要影响 |
+|------|------|----------|
+| L2 | 大臂 | 整体重力补偿精度，最重要 |
+| L3 | 小臂 | 中等负载补偿 |
+| L4 | 腕部 Roll | 末端姿态相关 |
+| L5 | 腕部 Pitch | 末端姿态相关 |
+| L6 | 末端 Yaw | 负载变化敏感 |
 
 ### 控制器参数 (`rs_a3_controllers.yaml`)
 
@@ -401,6 +516,10 @@ python3 scripts/inertia_calibration.py --ultra --samples 60
 | `/robot_description` | `std_msgs/String` | latched | URDF 描述 |
 | `/target_pose` | `geometry_msgs/PoseStamped` | 50 Hz | 目标末端位姿 |
 | `/debug/ik_solution` | `sensor_msgs/JointState` | 50 Hz | IK 解调试信息 |
+| `/debug/hw_command` | `sensor_msgs/JointState` | 20 Hz | 控制器发送的命令位置 |
+| `/debug/smoothed_command` | `sensor_msgs/JointState` | 20 Hz | 平滑后发送给电机的命令 |
+| `/debug/gravity_torque` | `sensor_msgs/JointState` | 20 Hz | 重力补偿力矩 |
+| `/debug/motor_temperature` | `sensor_msgs/JointState` | 4 Hz | 电机温度 (°C) |
 
 #### 订阅 (Subscribed)
 
@@ -413,6 +532,7 @@ python3 scripts/inertia_calibration.py --ultra --samples 60
 
 | Service | 类型 | 说明 |
 |---------|------|------|
+| `/rs_a3/set_zero_torque_mode` | `std_srvs/SetBool` | 启用/关闭零力矩模式（拖动示教） |
 | `/compute_ik` | `moveit_msgs/GetPositionIK` | 逆运动学求解 |
 | `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` | 笛卡尔路径规划 |
 
@@ -434,6 +554,376 @@ base_link
 │               └── L5_joint → part_9
 │                   └── L6_joint → l5_l6_urdf_asm
 │                       └── end_effector
+```
+
+---
+
+## 控制 API
+
+本节提供机械臂控制的编程接口说明和代码示例。
+
+### 关节配置
+
+| 关节 | 范围 (rad) | 范围 (°) | 力矩限制 |
+|------|-----------|----------|----------|
+| L1_joint | [-2.79, 2.79] | [-160°, 160°] | ±14 Nm |
+| L2_joint | [0.0, 3.67] | [0°, 210°] | ±14 Nm |
+| L3_joint | [-4.01, 0.0] | [-230°, 0°] | ±14 Nm |
+| L4_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
+| L5_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
+| L6_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
+
+**常用位置定义：**
+```python
+HOME_POSITION = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]  # home 位置
+ZERO_POSITION = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]       # 零位
+JOINT_NAMES = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
+```
+
+### 轨迹执行 API
+
+使用 `FollowJointTrajectory` Action 执行关节空间轨迹。
+
+**基本使用示例：**
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
+from builtin_interfaces.msg import Duration
+
+class ArmController(Node):
+    def __init__(self):
+        super().__init__('arm_controller_example')
+        self.joint_names = ['L1_joint', 'L2_joint', 'L3_joint',
+                           'L4_joint', 'L5_joint', 'L6_joint']
+        self.action_client = ActionClient(
+            self, FollowJointTrajectory,
+            '/arm_controller/follow_joint_trajectory')
+        self.action_client.wait_for_server()
+    
+    def move_to(self, positions, duration=3.0):
+        """移动到指定关节位置
+        
+        Args:
+            positions: 6个关节的目标位置 (rad)
+            duration: 运动时间 (秒)
+        Returns:
+            bool: 是否成功
+        """
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = self.joint_names
+        
+        point = JointTrajectoryPoint()
+        point.positions = positions
+        point.velocities = [0.0] * 6
+        point.time_from_start = Duration(sec=int(duration), 
+                                         nanosec=int((duration % 1) * 1e9))
+        goal.trajectory.points = [point]
+        
+        future = self.action_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, future)
+        
+        goal_handle = future.result()
+        if goal_handle.accepted:
+            result_future = goal_handle.get_result_async()
+            rclpy.spin_until_future_complete(self, result_future)
+            return result_future.result().result.error_code == 0
+        return False
+
+def main():
+    rclpy.init()
+    arm = ArmController()
+    
+    # 移动到 home 位置
+    arm.move_to([0.0, 0.785, -0.785, 0.0, 0.0, 0.0], duration=3.0)
+    
+    # 移动 L1 关节
+    arm.move_to([0.5, 0.785, -0.785, 0.0, 0.0, 0.0], duration=2.0)
+    
+    arm.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+**多点轨迹示例：**
+
+```python
+def move_through_points(self, waypoints, durations):
+    """执行多点轨迹
+    
+    Args:
+        waypoints: 轨迹点列表，每个点是6个关节位置
+        durations: 每段运动的时间
+    """
+    goal = FollowJointTrajectory.Goal()
+    goal.trajectory.joint_names = self.joint_names
+    
+    total_time = 0.0
+    for positions, duration in zip(waypoints, durations):
+        total_time += duration
+        point = JointTrajectoryPoint()
+        point.positions = positions
+        point.velocities = [0.0] * 6
+        point.time_from_start = Duration(sec=int(total_time), 
+                                         nanosec=int((total_time % 1) * 1e9))
+        goal.trajectory.points.append(point)
+    
+    future = self.action_client.send_goal_async(goal)
+    # ... 等待完成
+```
+
+### 关节状态读取 API
+
+订阅 `/joint_states` 话题获取实时关节状态。
+
+```python
+from sensor_msgs.msg import JointState
+
+class JointStateMonitor(Node):
+    def __init__(self):
+        super().__init__('joint_state_monitor')
+        self.positions = {}
+        self.velocities = {}
+        self.efforts = {}
+        
+        self.subscription = self.create_subscription(
+            JointState, '/joint_states', self.callback, 10)
+    
+    def callback(self, msg):
+        self.positions = dict(zip(msg.name, msg.position))
+        self.velocities = dict(zip(msg.name, msg.velocity))
+        self.efforts = dict(zip(msg.name, msg.effort))
+    
+    def get_joint_position(self, joint_name):
+        """获取单个关节位置"""
+        return self.positions.get(joint_name, None)
+    
+    def get_all_positions(self):
+        """获取所有关节位置"""
+        return [self.positions.get(f'L{i}_joint', 0.0) for i in range(1, 7)]
+```
+
+### 零力矩模式 API
+
+通过 ROS2 服务启用/禁用零力矩模式（拖动示教）。
+
+```python
+from std_srvs.srv import SetBool
+
+class ZeroTorqueController(Node):
+    def __init__(self):
+        super().__init__('zero_torque_controller')
+        self.client = self.create_client(SetBool, '/rs_a3/set_zero_torque_mode')
+        self.client.wait_for_service(timeout_sec=5.0)
+    
+    def enable(self):
+        """启用零力矩模式"""
+        return self._call(True)
+    
+    def disable(self):
+        """禁用零力矩模式"""
+        return self._call(False)
+    
+    def _call(self, enable: bool):
+        request = SetBool.Request()
+        request.data = enable
+        future = self.client.call_async(request)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        if future.done():
+            return future.result().success
+        return False
+
+# 使用示例
+controller = ZeroTorqueController()
+controller.enable()   # 启用拖动示教
+# ... 手动拖动机械臂 ...
+controller.disable()  # 恢复位置控制
+```
+
+**命令行使用：**
+
+```bash
+# 启用零力矩模式
+ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+
+# 禁用零力矩模式
+ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
+```
+
+### 调试话题 API
+
+系统提供多个调试话题用于监控和分析。
+
+| 话题 | 类型 | 频率 | 内容 |
+|------|------|------|------|
+| `/debug/hw_command` | JointState | 20Hz | 原始位置命令 |
+| `/debug/smoothed_command` | JointState | 20Hz | 平滑后命令 |
+| `/debug/gravity_torque` | JointState | 20Hz | 重力补偿力矩 |
+| `/debug/motor_temperature` | JointState | 4Hz | 电机温度 (°C) |
+
+**监控示例：**
+
+```python
+def gravity_torque_callback(msg):
+    """监控重力补偿力矩"""
+    torques = dict(zip(msg.name, msg.effort))
+    print(f"L2 重力补偿: {torques.get('L2_joint', 0):.2f} Nm")
+
+subscription = node.create_subscription(
+    JointState, '/debug/gravity_torque', gravity_torque_callback, 10)
+```
+
+### 完整控制示例
+
+以下是一个综合使用各种 API 的完整示例：
+
+```python
+#!/usr/bin/env python3
+"""RS-A3 机械臂控制完整示例"""
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
+from sensor_msgs.msg import JointState
+from std_srvs.srv import SetBool
+from builtin_interfaces.msg import Duration
+import time
+
+class RsA3Controller(Node):
+    """RS-A3 机械臂控制器"""
+    
+    JOINT_NAMES = ['L1_joint', 'L2_joint', 'L3_joint', 
+                   'L4_joint', 'L5_joint', 'L6_joint']
+    HOME = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]
+    ZERO = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    
+    def __init__(self):
+        super().__init__('rs_a3_controller')
+        
+        # Action 客户端
+        self.traj_client = ActionClient(
+            self, FollowJointTrajectory,
+            '/arm_controller/follow_joint_trajectory')
+        
+        # 服务客户端
+        self.zero_torque_client = self.create_client(
+            SetBool, '/rs_a3/set_zero_torque_mode')
+        
+        # 状态订阅
+        self.current_positions = [0.0] * 6
+        self.create_subscription(
+            JointState, '/joint_states', self._joint_state_cb, 10)
+        
+        # 等待服务就绪
+        self.traj_client.wait_for_server(timeout_sec=10.0)
+        self.zero_torque_client.wait_for_service(timeout_sec=5.0)
+        self.get_logger().info('控制器初始化完成')
+    
+    def _joint_state_cb(self, msg):
+        positions = dict(zip(msg.name, msg.position))
+        self.current_positions = [
+            positions.get(name, 0.0) for name in self.JOINT_NAMES]
+    
+    def move_to(self, positions, duration=3.0, wait=True):
+        """移动到目标位置"""
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = self.JOINT_NAMES
+        
+        point = JointTrajectoryPoint()
+        point.positions = positions
+        point.velocities = [0.0] * 6
+        point.time_from_start = Duration(
+            sec=int(duration), nanosec=int((duration % 1) * 1e9))
+        goal.trajectory.points = [point]
+        
+        future = self.traj_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, future)
+        
+        if wait and future.result().accepted:
+            result_future = future.result().get_result_async()
+            rclpy.spin_until_future_complete(self, result_future)
+            return result_future.result().result.error_code == 0
+        return future.result().accepted
+    
+    def go_home(self, duration=3.0):
+        """回到 home 位置"""
+        return self.move_to(self.HOME, duration)
+    
+    def go_zero(self, duration=3.0):
+        """回到零位"""
+        return self.move_to(self.ZERO, duration)
+    
+    def set_zero_torque(self, enable: bool):
+        """设置零力矩模式"""
+        req = SetBool.Request()
+        req.data = enable
+        future = self.zero_torque_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        return future.result().success if future.done() else False
+    
+    def get_positions(self):
+        """获取当前关节位置"""
+        return self.current_positions.copy()
+
+def main():
+    rclpy.init()
+    arm = RsA3Controller()
+    
+    try:
+        # 1. 移动到 home 位置
+        print("移动到 home 位置...")
+        arm.go_home()
+        
+        # 2. 执行简单运动
+        print("执行测试运动...")
+        arm.move_to([0.3, 0.785, -0.785, 0.0, 0.0, 0.0], duration=2.0)
+        arm.move_to([0.0, 1.0, -1.0, 0.3, 0.3, 0.0], duration=2.0)
+        
+        # 3. 启用零力矩模式
+        print("启用零力矩模式，可以手动拖动...")
+        arm.set_zero_torque(True)
+        time.sleep(5.0)  # 手动拖动时间
+        
+        # 4. 禁用零力矩并读取位置
+        arm.set_zero_torque(False)
+        print(f"当前位置: {arm.get_positions()}")
+        
+        # 5. 回到 home
+        arm.go_home()
+        print("完成!")
+        
+    finally:
+        arm.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### 命令行工具
+
+```bash
+# 查看关节状态
+ros2 topic echo /joint_states
+
+# 查看重力补偿力矩
+ros2 topic echo /debug/gravity_torque
+
+# 查看电机温度
+ros2 topic echo /debug/motor_temperature
+
+# 列出可用服务
+ros2 service list | grep rs_a3
+
+# 列出控制器
+ros2 control list_controllers
 ```
 
 ---
@@ -689,4 +1179,4 @@ Apache-2.0
 
 ---
 
-**最后更新**: 2026-02-02
+**最后更新**: 2026-02-04

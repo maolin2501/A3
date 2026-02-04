@@ -151,7 +151,7 @@ class XboxTeleopNode(Node):
         self.last_dpad_up = 0
         self.last_dpad_down = 0
         self.gripper_torque = 0.0  # 当前夹爪力矩
-        self.gripper_torque_step = 0.4  # 每次按键增加的力矩 (Nm)
+        self.gripper_torque_step = 1.0  # 每次按键增加的力矩 (Nm)
         self.gripper_motor_id = 7
         
         # 初始化CAN socket用于直接发送夹爪命令

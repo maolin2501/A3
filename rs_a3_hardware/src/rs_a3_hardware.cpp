@@ -37,6 +37,7 @@ RsA3HardwareInterface::RsA3HardwareInterface()
   , use_pinocchio_gravity_(false)    // 默认使用简化重力模型
   , pinocchio_initialized_(false)
   , use_calibrated_inertia_(false)   // 默认不使用标定后的惯性参数
+  , spin_thread_running_(false)      // 线程运行标志初始化
   , limit_margin_(0.15)          // 15度开始减速 (~8.6°)
   , limit_stop_margin_(0.02)     // 1度硬停止 (~1.1°)
   , limit_decel_factor_(0.3)     // 减速到30%
@@ -46,6 +47,11 @@ RsA3HardwareInterface::RsA3HardwareInterface()
 
 RsA3HardwareInterface::~RsA3HardwareInterface()
 {
+  // 停止 spin 线程
+  spin_thread_running_ = false;
+  if (spin_thread_.joinable()) {
+    spin_thread_.join();
+  }
   on_shutdown(rclcpp_lifecycle::State());
 }
 
@@ -241,10 +247,32 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     }
   }
   
-  // 读取零力矩模式Kd参数
+  // 读取零力矩模式Kd参数（默认值）
   if (info_.hardware_parameters.count("zero_torque_kd")) {
     zero_torque_kd_ = std::stod(info_.hardware_parameters.at("zero_torque_kd"));
   }
+  
+  // 读取零力矩模式关节独立 Kp/Kd 参数
+  zero_torque_kp_joints_.resize(joint_configs_.size(), 0.0);  // 默认 Kp=0
+  zero_torque_kd_joints_.resize(joint_configs_.size(), zero_torque_kd_);  // 默认使用全局 Kd
+  for (size_t i = 0; i < joint_configs_.size(); ++i) {
+    std::string kp_key = "zero_torque_kp_L" + std::to_string(i + 1);
+    std::string kd_key = "zero_torque_kd_L" + std::to_string(i + 1);
+    if (info_.hardware_parameters.count(kp_key)) {
+      zero_torque_kp_joints_[i] = std::stod(info_.hardware_parameters.at(kp_key));
+    }
+    if (info_.hardware_parameters.count(kd_key)) {
+      zero_torque_kd_joints_[i] = std::stod(info_.hardware_parameters.at(kd_key));
+    }
+  }
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+              "Zero torque mode joint Kp: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
+              zero_torque_kp_joints_[0], zero_torque_kp_joints_[1], zero_torque_kp_joints_[2],
+              zero_torque_kp_joints_[3], zero_torque_kp_joints_[4], zero_torque_kp_joints_[5]);
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+              "Zero torque mode joint Kd: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
+              zero_torque_kd_joints_[0], zero_torque_kd_joints_[1], zero_torque_kd_joints_[2],
+              zero_torque_kd_joints_[3], zero_torque_kd_joints_[4], zero_torque_kd_joints_[5]);
   
   // ============ Pinocchio 动力学模型初始化 ============
   // 读取 URDF 路径
@@ -307,6 +335,19 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     "/rs_a3/set_zero_torque_mode",
     std::bind(&RsA3HardwareInterface::zeroTorqueModeCallback, this,
               std::placeholders::_1, std::placeholders::_2));
+  
+  // 启动单独的线程来处理服务回调
+  spin_thread_running_ = true;
+  spin_thread_ = std::thread([this]() {
+    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                "Debug node spin thread started");
+    while (spin_thread_running_ && rclcpp::ok()) {
+      rclcpp::spin_some(debug_node_);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 100Hz
+    }
+    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                "Debug node spin thread stopped");
+  });
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
               "Zero torque mode service created: /rs_a3/set_zero_torque_mode (Kd=%.1f)", zero_torque_kd_);
@@ -879,9 +920,9 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     double final_cmd_position;
     
     if (zero_torque_mode_) {
-      // 零力矩模式: Kp=0, Kd=阻尼, 仅重力补偿（100%用于零力矩模式）
-      motor_kp = 0.0;
-      motor_kd = std::clamp(zero_torque_kd_, 0.0, 5.0);
+      // 零力矩模式: 使用关节独立的 Kp/Kd，仅重力补偿（100%用于零力矩模式）
+      motor_kp = std::clamp(zero_torque_kp_joints_[i], 0.0, 500.0);
+      motor_kd = std::clamp(zero_torque_kd_joints_[i], 0.0, 5.0);
       
       // 零力矩模式使用100%重力补偿
       if (use_pinocchio_gravity_ && pinocchio_initialized_ && i < pinocchio_gravity_torques.size()) {
@@ -926,10 +967,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     usleep(50);
   }
 
-  // 处理debug节点的回调（包括零力矩服务）
-  if (debug_node_) {
-    rclcpp::spin_some(debug_node_);
-  }
+  // 注意：服务回调现在在单独的 spin_thread_ 中处理，无需在此调用 spin_some
 
   // 发布调试信息（每10次发布一次，约20Hz）
   if (write_counter % 10 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
@@ -1000,8 +1038,12 @@ void RsA3HardwareInterface::zeroTorqueModeCallback(
   
   if (zero_torque_mode_) {
     RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                "ZERO TORQUE MODE ENABLED! Kp=0, Kd=%.1f, Gravity Comp=%s",
-                zero_torque_kd_, gravity_comp_enabled_ ? "ON" : "OFF");
+                "ZERO TORQUE MODE ENABLED! Joint Kp=[%.1f,%.1f,%.1f,%.1f,%.1f,%.1f], Kd=[%.1f,%.1f,%.1f,%.1f,%.1f,%.1f], Gravity Comp=%s",
+                zero_torque_kp_joints_[0], zero_torque_kp_joints_[1], zero_torque_kp_joints_[2],
+                zero_torque_kp_joints_[3], zero_torque_kp_joints_[4], zero_torque_kp_joints_[5],
+                zero_torque_kd_joints_[0], zero_torque_kd_joints_[1], zero_torque_kd_joints_[2],
+                zero_torque_kd_joints_[3], zero_torque_kd_joints_[4], zero_torque_kd_joints_[5],
+                gravity_comp_enabled_ ? "ON" : "OFF");
     response->message = "Zero torque mode enabled - robot can be manually moved";
   } else {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
