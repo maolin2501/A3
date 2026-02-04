@@ -1,0 +1,34 @@
+# RS-A3 多机械臂配置文件
+# 定义每条机械臂的 CAN 接口、命名空间等参数
+
+# 机械臂列表
+arms:
+  arm1:
+    prefix: "arm1_"           # 命名空间前缀
+    can_interface: "can0"     # CAN 接口
+    host_can_id: 253          # 主机 CAN ID (0xFD)
+    enabled: true             # 是否启用
+    
+  arm2:
+    prefix: "arm2_"
+    can_interface: "can1"
+    host_can_id: 253
+    enabled: true
+    
+  arm3:
+    prefix: "arm3_"
+    can_interface: "can2"
+    host_can_id: 253
+    enabled: false            # 默认禁用
+    
+  arm4:
+    prefix: "arm4_"
+    can_interface: "can3"
+    host_can_id: 253
+    enabled: false
+
+# 全局设置
+global:
+  update_rate: 200            # 控制器更新频率 Hz
+  use_mock_hardware: false    # 是否使用模拟硬件
+  use_rviz: true              # 是否启动 RViz

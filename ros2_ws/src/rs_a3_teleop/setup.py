@@ -33,6 +33,7 @@ setup(
             'joycon_imu_teleop = rs_a3_teleop.joycon_imu_teleop_node:main',
             'joycon_imu_driver = rs_a3_teleop.joycon_imu_driver:main',
             'joycon_visualizer = rs_a3_teleop.joycon_visualizer_node:main',
+            'master_slave_node = rs_a3_teleop.master_slave_node:main',
         ],
     },
 )

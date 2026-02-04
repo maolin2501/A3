@@ -1,0 +1,47 @@
+# RS-A3 主从遥操作配置文件
+# 支持一对一、一对多、多对多映射模式
+
+# 全局设置
+rate: 50.0                    # 控制频率 Hz
+
+# 主从映射配置
+# 支持多组映射，每组可以是一对一或一对多
+mappings:
+  # 示例1：一对一映射（arm1 控制 arm2）
+  - master: "arm1"            # 主臂命名空间
+    slaves: ["arm2"]          # 从臂命名空间列表
+    scale: 1.0                # 位置缩放比例
+    mirror: false             # 是否镜像（左右手对称）
+    joint_offset: [0, 0, 0, 0, 0, 0]  # 各关节偏移量（rad）
+    enabled: true             # 是否启用此映射
+
+  # 示例2：一对多映射（arm1 同时控制 arm3 和 arm4）
+  # - master: "arm1"
+  #   slaves: ["arm3", "arm4"]
+  #   scale: 1.0
+  #   mirror: false
+  #   enabled: false
+
+  # 示例3：镜像映射（左右手对称）
+  # - master: "left_arm"
+  #   slaves: ["right_arm"]
+  #   scale: 1.0
+  #   mirror: true            # L1, L4, L6 翻转
+  #   enabled: false
+
+# 安全设置
+safety:
+  max_velocity: 2.0           # 最大速度限制 rad/s
+  position_tolerance: 0.5     # 位置跟随容差 rad（超过则停止跟随）
+  velocity_tolerance: 1.0     # 速度容差 rad/s
+  enable_collision_check: false  # 是否启用碰撞检测（需要 MoveIt）
+
+# 主臂设置
+master:
+  use_zero_torque_mode: true  # 主臂是否使用零力矩模式（拖动示教）
+  enable_gravity_comp: true   # 是否启用重力补偿
+
+# 从臂设置  
+slave:
+  trajectory_duration: 0.05   # 轨迹执行时间（秒）
+  use_streaming: true         # 使用流式控制而非 Action 目标点

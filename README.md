@@ -10,6 +10,7 @@
 - [功能包说明](#功能包说明)
 - [安装配置](#安装配置)
 - [快速开始](#快速开始)
+- [多机械臂控制](#多机械臂控制)
 - [控制参数](#控制参数)
 - [ROS2 接口](#ros2-接口)
 - [控制 API](#控制-api)
@@ -271,6 +272,98 @@ ros2 launch rs_a3_moveit_config robot.launch.py can_interface:=can0
 ```bash
 ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
 ```
+
+---
+
+## 多机械臂控制
+
+支持同时控制多条机械臂，每条机械臂使用独立的 CAN 接口和命名空间。
+
+### 配置多个 CAN 接口
+
+```bash
+# 配置 2 个 CAN 接口（can0 和 can1）
+sudo ./scripts/setup_multi_can.sh 2
+
+# 配置 4 个 CAN 接口
+sudo ./scripts/setup_multi_can.sh 4
+```
+
+### 启动多臂系统
+
+**使用配置文件（推荐）**:
+
+编辑 `rs_a3_description/config/multi_arm_config.yaml` 配置启用的机械臂：
+
+```yaml
+arms:
+  arm1:
+    prefix: "arm1_"
+    can_interface: "can0"
+    enabled: true
+  arm2:
+    prefix: "arm2_"
+    can_interface: "can1"
+    enabled: true
+```
+
+启动：
+```bash
+ros2 launch rs_a3_description multi_arm_control.launch.py
+```
+
+### 主从遥操作
+
+支持一对一、一对多、多对多的灵活主从映射。
+
+**一对一模式（简单）**:
+```bash
+# arm1 作为主臂，arm2 作为从臂
+ros2 launch rs_a3_teleop master_slave.launch.py master_ns:=arm1 slave_ns:=arm2
+```
+
+**一对多模式**:
+```bash
+# arm1 同时控制 arm2, arm3, arm4
+ros2 launch rs_a3_teleop master_slave.launch.py \
+    master_ns:=arm1 slave_ns_list:="arm2,arm3,arm4"
+```
+
+**使用配置文件（复杂映射）**:
+
+编辑 `rs_a3_description/config/master_slave_config.yaml`：
+
+```yaml
+mappings:
+  # 一对多映射
+  - master: "arm1"
+    slaves: ["arm2", "arm3"]
+    scale: 1.0
+    mirror: false
+    enabled: true
+    
+  # 镜像映射（左右手对称）
+  - master: "arm4"
+    slaves: ["arm5"]
+    mirror: true
+    enabled: true
+```
+
+启动：
+```bash
+ros2 launch rs_a3_teleop master_slave.launch.py \
+    config_file:=/path/to/master_slave_config.yaml
+```
+
+### 多臂 ROS2 接口
+
+启用 arm1 和 arm2 后的接口示例：
+
+| 类型 | arm1 | arm2 |
+|------|------|------|
+| 关节状态 | `/arm1/joint_states` | `/arm2/joint_states` |
+| 轨迹控制 | `/arm1/arm1_arm_controller/follow_joint_trajectory` | `/arm2/arm2_arm_controller/follow_joint_trajectory` |
+| 零力矩模式 | `/arm1/set_zero_torque_mode` | `/arm2/set_zero_torque_mode` |
 
 ---
 

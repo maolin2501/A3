@@ -2,9 +2,9 @@
 <!-- RS-A3 ros2_control configuration -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="rs_a3_ros2_control" params="use_mock_hardware can_interface host_can_id">
+  <xacro:macro name="rs_a3_ros2_control" params="prefix use_mock_hardware can_interface host_can_id">
 
-    <ros2_control name="RsA3System" type="system">
+    <ros2_control name="${prefix}RsA3System" type="system">
       <hardware>
         <xacro:if value="${use_mock_hardware}">
           <plugin>mock_components/GenericSystem</plugin>
@@ -97,7 +97,7 @@
       </hardware>
 
       <!-- Joint L1 - RS00 Motor 1 -->
-      <joint name="L1_joint">
+      <joint name="${prefix}L1_joint">
         <param name="motor_id">1</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -120,7 +120,7 @@
       </joint>
 
       <!-- Joint L2 - RS00 Motor 2 -->
-      <joint name="L2_joint">
+      <joint name="${prefix}L2_joint">
         <param name="motor_id">2</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -143,7 +143,7 @@
       </joint>
 
       <!-- Joint L3 - RS00 Motor 3 -->
-      <joint name="L3_joint">
+      <joint name="${prefix}L3_joint">
         <param name="motor_id">3</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -166,7 +166,7 @@
       </joint>
 
       <!-- Joint L4 - RS05 Motor 4 -->
-      <joint name="L4_joint">
+      <joint name="${prefix}L4_joint">
         <param name="motor_id">4</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>
@@ -189,7 +189,7 @@
       </joint>
 
       <!-- Joint L5 - RS05 Motor 5 -->
-      <joint name="L5_joint">
+      <joint name="${prefix}L5_joint">
         <param name="motor_id">5</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>
@@ -212,7 +212,7 @@
       </joint>
 
       <!-- Joint L6 - RS05 Motor 6 -->
-      <joint name="L6_joint">
+      <joint name="${prefix}L6_joint">
         <param name="motor_id">6</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>
