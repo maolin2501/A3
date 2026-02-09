@@ -146,6 +146,8 @@ class XboxTeleopNode(Node):
         self.last_b_button = 0
         self.last_x_button = 0
         self.is_going_home = False  # 是否正在回home/zero
+        self.home_start_time = None  # 回home开始时间
+        self.home_timeout = 15.0  # 回home超时时间（秒）
         
         # 方向键控制夹爪电机（ID=7）
         self.last_dpad_up = 0
@@ -419,6 +421,7 @@ class XboxTeleopNode(Node):
         import time
         
         self.is_going_home = True
+        self.home_start_time = self.get_clock().now()
         
         # 等待MoveGroup服务完全准备好（包括规划场景）
         self.get_logger().info('等待MoveGroup服务准备就绪...')
@@ -472,6 +475,7 @@ class XboxTeleopNode(Node):
                 
                 result = result_future.result()
                 self.is_going_home = False
+                self.home_start_time = None
                 
                 # 检查结果
                 try:
@@ -511,6 +515,7 @@ class XboxTeleopNode(Node):
         
         self.get_logger().error('零点运动多次尝试后失败，请手动控制机械臂')
         self.is_going_home = False
+        self.home_start_time = None
         self.pose_initialized = False
         self.smoothed_joint_positions = None
         self.last_ik_joint_positions = None
@@ -577,6 +582,7 @@ class XboxTeleopNode(Node):
             return
         
         self.is_going_home = True
+        self.home_start_time = self.get_clock().now()
         self.get_logger().info('正在回到初始位置...')
         
         # 创建MoveGroup请求
@@ -626,6 +632,7 @@ class XboxTeleopNode(Node):
         if not goal_handle.accepted:
             self.get_logger().warn('回home请求被拒绝')
             self.is_going_home = False
+            self.home_start_time = None
             return
         
         self.get_logger().info('回home请求已接受，正在执行...')
@@ -636,6 +643,7 @@ class XboxTeleopNode(Node):
         """回home结果回调"""
         result = future.result().result
         self.is_going_home = False
+        self.home_start_time = None
         
         if result.error_code.val == result.error_code.SUCCESS:
             self.get_logger().info('已回到初始位置！')
@@ -662,6 +670,7 @@ class XboxTeleopNode(Node):
             return
         
         self.is_going_home = True
+        self.home_start_time = self.get_clock().now()
         self.get_logger().info('正在回到零点位置...')
         
         # 创建MoveGroup请求
@@ -708,6 +717,7 @@ class XboxTeleopNode(Node):
         if not goal_handle.accepted:
             self.get_logger().warn('回零点请求被拒绝')
             self.is_going_home = False
+            self.home_start_time = None
             return
         
         self.get_logger().info('回零点请求已接受，正在执行...')
@@ -718,6 +728,7 @@ class XboxTeleopNode(Node):
         """回零点结果回调"""
         result = future.result().result
         self.is_going_home = False
+        self.home_start_time = None
         
         if result.error_code.val == result.error_code.SUCCESS:
             self.get_logger().info('已回到零点位置！')
@@ -795,9 +806,20 @@ class XboxTeleopNode(Node):
                 self.send_gripper_torque(0.0)
             self.last_dpad_down = dpad_down
             
-        # 如果正在回home/zero，跳过普通运动控制
+        # 如果正在回home/zero，跳过普通运动控制（带超时保护）
         if self.is_going_home:
-            return
+            # 超时检测 - 防止is_going_home永久阻塞
+            if self.home_start_time is not None:
+                elapsed = (self.get_clock().now() - self.home_start_time).nanoseconds / 1e9
+                if elapsed > self.home_timeout:
+                    self.get_logger().warn(f'回home/zero超时({elapsed:.1f}s)，重置状态，恢复手柄控制')
+                    self.is_going_home = False
+                    self.home_start_time = None
+                    self.pose_initialized = False  # 重新同步位姿
+                else:
+                    return
+            else:
+                return
             
         # 解析手柄输入 -> 笛卡尔速度映射
         # Xbox手柄映射:

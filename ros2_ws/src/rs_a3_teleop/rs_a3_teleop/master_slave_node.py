@@ -31,8 +31,10 @@ class MappingConfig:
     slaves: List[str]
     scale: float = 1.0
     mirror: bool = False
-    joint_offset: List[float] = field(default_factory=lambda: [0.0] * 6)
+    joint_offset: List[float] = field(default_factory=lambda: [0.0] * 7)  # 支持7关节（含夹爪）
     enabled: bool = True
+    include_gripper: bool = True  # 是否包含夹爪（L7）
+    joint_count: int = 7  # 关节数量（6 或 7）
 
 
 class MasterSlaveMapping:
@@ -46,6 +48,13 @@ class MasterSlaveMapping:
         
         self.master_state: Optional[JointState] = None
         self.last_target: Optional[List[float]] = None
+        self.last_update_time: Optional[float] = None
+        self.state_updated: bool = False  # 标记是否有新状态
+        
+        # 主臂关节名称（用于按顺序提取位置）
+        master_prefix = f"{config.master}_"
+        num_joints = config.joint_count if config.include_gripper else 6
+        self.master_joint_names = [f"{master_prefix}L{i}_joint" for i in range(1, num_joints + 1)]
         
         # 回调组
         self.cb_group = ReentrantCallbackGroup()
@@ -89,33 +98,53 @@ class MasterSlaveMapping:
     def master_callback(self, msg: JointState):
         """主臂状态回调"""
         self.master_state = msg
+        self.state_updated = True
     
     def update(self):
         """更新从臂位置"""
         if self.master_state is None:
             return
         
-        # 获取主臂关节位置
-        master_positions = list(self.master_state.position)
-        if len(master_positions) < 6:
+        # 只处理新状态，避免重复发送
+        if not self.state_updated:
+            return
+        self.state_updated = False
+        
+        # 根据关节名称按顺序提取主臂关节位置
+        master_positions = []
+        for joint_name in self.master_joint_names:
+            if joint_name in self.master_state.name:
+                idx = self.master_state.name.index(joint_name)
+                master_positions.append(self.master_state.position[idx])
+            else:
+                # 关节不存在，跳过此更新
+                return
+        
+        # 根据配置确定关节数量
+        num_joints = self.config.joint_count if self.config.include_gripper else 6
+        
+        if len(master_positions) < num_joints:
             return
         
         # 计算目标位置
-        target_positions = self.compute_target(master_positions)
+        target_positions = self.compute_target(master_positions[:num_joints])
         
-        # 安全检查
-        if not self.safety_check(target_positions):
-            return
+        # 安全限速（使用实际时间间隔）
+        import time
+        current_time = time.time()
+        limited_positions = self.safety_check(target_positions, current_time)
+        self.last_update_time = current_time
         
-        self.last_target = target_positions
+        self.last_target = limited_positions
         
         # 发送到所有从臂
         for slave_ns in self.config.slaves:
-            self.send_to_slave(slave_ns, target_positions)
+            self.send_to_slave(slave_ns, limited_positions)
     
     def compute_target(self, master_positions: List[float]) -> List[float]:
-        """计算从臂目标位置"""
-        target = list(master_positions[:6])
+        """计算从臂目标位置（支持6或7关节）"""
+        num_joints = len(master_positions)
+        target = list(master_positions)
         
         # 应用缩放
         target = [p * self.config.scale for p in target]
@@ -125,50 +154,63 @@ class MasterSlaveMapping:
             target[0] = -target[0]  # L1
             target[3] = -target[3]  # L4
             target[5] = -target[5]  # L6
+            # 夹爪（L7）不镜像，保持原样
         
         # 应用偏移
-        target = [p + o for p, o in zip(target, self.config.joint_offset)]
+        offset = self.config.joint_offset[:num_joints]
+        target = [p + o for p, o in zip(target, offset)]
         
         return target
     
-    def safety_check(self, target: List[float]) -> bool:
-        """安全检查"""
+    def safety_check(self, target: List[float], current_time: float = None) -> List[float]:
+        """安全检查并限制速度，返回限速后的目标位置"""
         if self.last_target is None:
-            return True
+            return target
         
-        # 检查速度限制
-        max_vel = self.safety.get('max_velocity', 2.0)
-        dt = 1.0 / 50.0  # 假设 50Hz
+        # 使用实际时间间隔
+        if current_time and self.last_update_time:
+            dt = current_time - self.last_update_time
+            dt = max(0.005, min(dt, 0.1))  # 限制在 5ms ~ 100ms
+        else:
+            dt = 0.02  # 默认 50Hz
         
+        # 检查速度限制并进行限速
+        max_vel = self.safety.get('max_velocity', 10.0)  # 提高默认限速到 10 rad/s
+        max_delta = max_vel * dt
+        
+        limited_target = []
         for i, (curr, prev) in enumerate(zip(target, self.last_target)):
-            velocity = abs(curr - prev) / dt
-            if velocity > max_vel:
-                self.node.get_logger().warn(
-                    f'关节 {i+1} 速度超限: {velocity:.2f} > {max_vel}'
-                )
-                return False
+            delta = curr - prev
+            if abs(delta) > max_delta:
+                # 限制变化量，但允许渐进追踪
+                limited_delta = max_delta if delta > 0 else -max_delta
+                limited_target.append(prev + limited_delta)
+            else:
+                limited_target.append(curr)
         
-        return True
+        return limited_target
     
     def send_to_slave(self, slave_ns: str, target_positions: List[float]):
-        """发送命令到从臂"""
-        # 生成关节名称
+        """发送命令到从臂（支持6或7关节）"""
+        num_joints = len(target_positions)
+        
+        # 生成关节名称（根据关节数量）
         prefix = f"{slave_ns}_"
-        joint_names = [f"{prefix}L{i}_joint" for i in range(1, 7)]
+        joint_names = [f"{prefix}L{i}_joint" for i in range(1, num_joints + 1)]
         
         # 创建轨迹消息
         trajectory = JointTrajectory()
         trajectory.joint_names = joint_names
         
         point = JointTrajectoryPoint()
-        point.positions = target_positions
-        point.velocities = [0.0] * 6
+        point.positions = list(target_positions)
+        point.velocities = [0.0] * num_joints
         
-        # 设置执行时间
-        duration_sec = self.slave_cfg.get('trajectory_duration', 0.05)
+        # 设置执行时间（减小以提高响应速度）
+        duration_sec = self.slave_cfg.get('trajectory_duration', 0.02)  # 默认 20ms
         point.time_from_start = Duration(
-            sec=int(duration_sec),
-            nanosec=int((duration_sec % 1) * 1e9)
+            sec=0,
+            nanosec=int(duration_sec * 1e9)
         )
         
         trajectory.points = [point]
@@ -213,13 +255,19 @@ class MasterSlaveNode(Node):
         
         for mapping_cfg in self.config.get('mappings', []):
             if mapping_cfg.get('enabled', True):
+                include_gripper = mapping_cfg.get('include_gripper', True)
+                joint_count = mapping_cfg.get('joint_count', 7 if include_gripper else 6)
+                default_offset = [0.0] * joint_count
+                
                 cfg = MappingConfig(
                     master=mapping_cfg['master'],
                     slaves=mapping_cfg['slaves'],
                     scale=mapping_cfg.get('scale', 1.0),
                     mirror=mapping_cfg.get('mirror', False),
-                    joint_offset=mapping_cfg.get('joint_offset', [0.0] * 6),
-                    enabled=mapping_cfg.get('enabled', True)
+                    joint_offset=mapping_cfg.get('joint_offset', default_offset),
+                    enabled=mapping_cfg.get('enabled', True),
+                    include_gripper=include_gripper,
+                    joint_count=joint_count
                 )
                 mapping = MasterSlaveMapping(
                     self, cfg, self.safety_config, self.slave_config
@@ -276,10 +324,21 @@ class MasterSlaveNode(Node):
         return config
     
     def enable_master_zero_torque(self):
-        """启用主臂零力矩模式"""
+        """启用主臂零力矩模式（支持纯零力矩模式）"""
+        use_pure_zero_torque = self.master_config.get('pure_zero_torque', True)
+        
         for mapping in self.mappings:
             master_ns = mapping.config.master
-            service_name = f'/{master_ns}/set_zero_torque_mode'
+            
+            # 根据配置选择服务
+            if use_pure_zero_torque:
+                # 纯零力矩模式：Kp=0, Kd=0, torque=0（用于主从遥操作）
+                service_name = f'/{master_ns}/set_pure_zero_torque_mode'
+                mode_name = '纯零力矩'
+            else:
+                # 带重力补偿的零力矩模式
+                service_name = f'/{master_ns}/set_zero_torque_mode'
+                mode_name = '重力补偿零力矩'
             
             client = self.create_client(SetBool, service_name)
             
@@ -287,7 +346,7 @@ class MasterSlaveNode(Node):
                 request = SetBool.Request()
                 request.data = True
                 future = client.call_async(request)
-                self.get_logger().info(f'已请求启用 {master_ns} 零力矩模式')
+                self.get_logger().info(f'已请求启用 {master_ns} {mode_name}模式')
             else:
                 self.get_logger().warn(f'服务不可用: {service_name}')
     

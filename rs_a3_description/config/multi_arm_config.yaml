@@ -14,18 +14,19 @@ arms:
     can_interface: "can1"
     host_can_id: 253
     enabled: true
+    inertia_config_path: "/home/wy/RS/A3/rs_a3_description/config/inertia_params_arm2.yaml"
     
   arm3:
     prefix: "arm3_"
     can_interface: "can2"
     host_can_id: 253
-    enabled: false            # 默认禁用
+    enabled: true             # 启用作为从臂
     
   arm4:
     prefix: "arm4_"
     can_interface: "can3"
     host_can_id: 253
-    enabled: false
+    enabled: true             # 启用作为从臂
 
 # 全局设置
 global:

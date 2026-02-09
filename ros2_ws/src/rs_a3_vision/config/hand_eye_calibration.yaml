@@ -1,0 +1,45 @@
+# 手眼标定结果
+# 此文件应由标定程序生成，或手动测量填写
+
+# 标定类型
+# eye_on_base: 相机固定在基座/环境中
+# eye_in_hand: 相机安装在机械臂末端
+calibration_type: "eye_on_base"
+
+# 相机相对于参考坐标系的位姿
+# eye_on_base: base_link -> camera_link
+# eye_in_hand: end_effector -> camera_link
+translation:
+  x: 0.0
+  y: -0.30
+  z: 0.50
+
+rotation:
+  # 四元数 (x, y, z, w)
+  x: 0.0
+  y: 0.707
+  z: 0.0
+  w: 0.707
+
+# 标定日期和备注
+calibration_date: "2026-01-23"
+notes: "手动测量值，需要实际标定验证"
+
+# ============ 标定步骤说明 ============
+# 
+# 方法1: 使用 easy_handeye 包
+# 1. 安装: sudo apt install ros-humble-easy-handeye2
+# 2. 在机械臂末端或环境中放置 ArUco 标定板
+# 3. 运行标定程序，采集多组数据
+# 4. 保存标定结果到此文件
+#
+# 方法2: 手动测量
+# 1. 将机械臂移动到已知位置
+# 2. 测量相机相对于基座的位置和朝向
+# 3. 填写上面的 translation 和 rotation 值
+#
+# 方法3: 使用标定板和视觉检测
+# 1. 在机械臂末端安装标定板
+# 2. 移动机械臂到多个位置
+# 3. 记录机械臂关节位置和标定板在相机中的位置
+# 4. 求解 AX = XB 问题得到标定结果

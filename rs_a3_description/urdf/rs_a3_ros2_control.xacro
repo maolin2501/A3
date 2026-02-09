@@ -2,9 +2,9 @@
 <!-- RS-A3 ros2_control configuration -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="rs_a3_ros2_control" params="prefix use_mock_hardware can_interface host_can_id">
+  <xacro:macro name="rs_a3_ros2_control" params="use_mock_hardware can_interface host_can_id">
 
-    <ros2_control name="${prefix}RsA3System" type="system">
+    <ros2_control name="RsA3System" type="system">
       <hardware>
         <xacro:if value="${use_mock_hardware}">
           <plugin>mock_components/GenericSystem</plugin>
@@ -29,23 +29,7 @@
           <param name="gravity_feedforward_ratio">0.5</param>  <!-- 50%重力补偿比例 -->
           
           <!-- 零力矩模式参数 -->
-          <param name="zero_torque_kd">0.3</param>  <!-- 零力矩模式默认阻尼系数 -->
-          
-          <!-- 零力矩模式关节独立 Kp（通常为0，可微调提供轻微位置保持） -->
-          <param name="zero_torque_kp_L1">0.0</param>
-          <param name="zero_torque_kp_L2">0.0</param>
-          <param name="zero_torque_kp_L3">0.0</param>
-          <param name="zero_torque_kp_L4">0.0</param>
-          <param name="zero_torque_kp_L5">0.0</param>
-          <param name="zero_torque_kp_L6">0.0</param>
-          
-          <!-- 零力矩模式关节独立 Kd（RS00大电机需要更高阻尼） -->
-          <param name="zero_torque_kd_L1">0.17</param>
-          <param name="zero_torque_kd_L2">0.35</param>  <!-- 大臂，高阻尼 -->
-          <param name="zero_torque_kd_L3">0.40</param>  <!-- 小臂 -->
-          <param name="zero_torque_kd_L4">0.05</param>
-          <param name="zero_torque_kd_L5">0.05</param>
-          <param name="zero_torque_kd_L6">0.05</param>
+          <param name="zero_torque_kd">0.3</param>  <!-- 零力矩模式阻尼系数 -->
           
           <!-- Pinocchio 动力学模型配置 -->
           <!-- 注意：需要设置 URDF 文件的绝对路径 -->
@@ -97,7 +81,7 @@
       </hardware>
 
       <!-- Joint L1 - RS00 Motor 1 -->
-      <joint name="${prefix}L1_joint">
+      <joint name="L1_joint">
         <param name="motor_id">1</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -120,7 +104,7 @@
       </joint>
 
       <!-- Joint L2 - RS00 Motor 2 -->
-      <joint name="${prefix}L2_joint">
+      <joint name="L2_joint">
         <param name="motor_id">2</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -143,7 +127,7 @@
       </joint>
 
       <!-- Joint L3 - RS00 Motor 3 -->
-      <joint name="${prefix}L3_joint">
+      <joint name="L3_joint">
         <param name="motor_id">3</param>
         <param name="motor_type">RS00</param>
         <param name="position_offset">0.0</param>
@@ -166,7 +150,7 @@
       </joint>
 
       <!-- Joint L4 - RS05 Motor 4 -->
-      <joint name="${prefix}L4_joint">
+      <joint name="L4_joint">
         <param name="motor_id">4</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>
@@ -189,7 +173,7 @@
       </joint>
 
       <!-- Joint L5 - RS05 Motor 5 -->
-      <joint name="${prefix}L5_joint">
+      <joint name="L5_joint">
         <param name="motor_id">5</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>
@@ -212,7 +196,7 @@
       </joint>
 
       <!-- Joint L6 - RS05 Motor 6 -->
-      <joint name="${prefix}L6_joint">
+      <joint name="L6_joint">
         <param name="motor_id">6</param>
         <param name="motor_type">RS05</param>
         <param name="position_offset">0.0</param>

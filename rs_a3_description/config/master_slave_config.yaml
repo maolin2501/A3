@@ -1,5 +1,6 @@
 # RS-A3 主从遥操作配置文件
 # 支持一对一、一对多、多对多映射模式
+# 支持6轴机械臂 + 夹爪（L7）共7关节控制
 
 # 全局设置
 rate: 50.0                    # 控制频率 Hz
@@ -7,31 +8,29 @@ rate: 50.0                    # 控制频率 Hz
 # 主从映射配置
 # 支持多组映射，每组可以是一对一或一对多
 mappings:
-  # 示例1：一对一映射（arm1 控制 arm2）
-  - master: "arm1"            # 主臂命名空间
-    slaves: ["arm2"]          # 从臂命名空间列表
+  # 映射1：arm1 (can0) 主臂 -> arm4 (can3) 从臂
+  - master: "arm1"            # 主臂命名空间 (can0)
+    slaves: ["arm4"]          # 从臂命名空间列表 (can3)
     scale: 1.0                # 位置缩放比例
     mirror: false             # 是否镜像（左右手对称）
-    joint_offset: [0, 0, 0, 0, 0, 0]  # 各关节偏移量（rad）
+    joint_offset: [0, 0, 0, 0, 0, 0, 0]  # 各关节偏移量（rad），7个关节
+    include_gripper: true     # 是否包含夹爪（L7）跟随
+    joint_count: 7            # 关节数量（6 或 7）
     enabled: true             # 是否启用此映射
 
-  # 示例2：一对多映射（arm1 同时控制 arm3 和 arm4）
-  # - master: "arm1"
-  #   slaves: ["arm3", "arm4"]
-  #   scale: 1.0
-  #   mirror: false
-  #   enabled: false
-
-  # 示例3：镜像映射（左右手对称）
-  # - master: "left_arm"
-  #   slaves: ["right_arm"]
-  #   scale: 1.0
-  #   mirror: true            # L1, L4, L6 翻转
-  #   enabled: false
+  # 映射2：arm2 (can1) 主臂 -> arm3 (can2) 从臂
+  - master: "arm2"            # 主臂命名空间 (can1)
+    slaves: ["arm3"]          # 从臂命名空间列表 (can2)
+    scale: 1.0
+    mirror: false
+    joint_offset: [0, 0, 0, 0, 0, 0, 0]
+    include_gripper: true
+    joint_count: 7
+    enabled: true
 
 # 安全设置
 safety:
-  max_velocity: 2.0           # 最大速度限制 rad/s
+  max_velocity: 15.0          # 最大速度限制 rad/s（提高以允许快速跟随）
   position_tolerance: 0.5     # 位置跟随容差 rad（超过则停止跟随）
   velocity_tolerance: 1.0     # 速度容差 rad/s
   enable_collision_check: false  # 是否启用碰撞检测（需要 MoveIt）
@@ -39,9 +38,11 @@ safety:
 # 主臂设置
 master:
   use_zero_torque_mode: true  # 主臂是否使用零力矩模式（拖动示教）
+  pure_zero_torque: false     # false = 使用带重力补偿的零力矩模式（用于拖动示教）
+                              # true = 使用纯零力矩模式（Kp=0, Kd=0, torque=0）
   enable_gravity_comp: true   # 是否启用重力补偿
 
 # 从臂设置  
 slave:
-  trajectory_duration: 0.05   # 轨迹执行时间（秒）
+  trajectory_duration: 0.02   # 轨迹执行时间（秒）- 减小以提高响应速度
   use_streaming: true         # 使用流式控制而非 Action 目标点

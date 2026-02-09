@@ -158,9 +158,7 @@ private:
   // ============ 零力矩模式与重力补偿 ============
   // 零力矩模式标志
   bool zero_torque_mode_;           // 是否启用零力矩模式
-  double zero_torque_kd_;           // 零力矩模式的默认阻尼系数
-  std::vector<double> zero_torque_kp_joints_;  // 零力矩模式关节独立 Kp
-  std::vector<double> zero_torque_kd_joints_;  // 零力矩模式关节独立 Kd
+  double zero_torque_kd_;           // 零力矩模式的阻尼系数
   
   // 重力补偿参数 (每个关节: τ = sin_coeff * sin(θ) + cos_coeff * cos(θ) + offset)
   struct GravityCompParams {

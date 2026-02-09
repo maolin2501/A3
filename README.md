@@ -10,10 +10,8 @@
 - [功能包说明](#功能包说明)
 - [安装配置](#安装配置)
 - [快速开始](#快速开始)
-- [多机械臂控制](#多机械臂控制)
 - [控制参数](#控制参数)
 - [ROS2 接口](#ros2-接口)
-- [控制 API](#控制-api)
 - [电机通信协议](#电机通信协议)
 - [故障排除](#故障排除)
 - [目录结构](#目录结构)
@@ -275,98 +273,6 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 
 ---
 
-## 多机械臂控制
-
-支持同时控制多条机械臂，每条机械臂使用独立的 CAN 接口和命名空间。
-
-### 配置多个 CAN 接口
-
-```bash
-# 配置 2 个 CAN 接口（can0 和 can1）
-sudo ./scripts/setup_multi_can.sh 2
-
-# 配置 4 个 CAN 接口
-sudo ./scripts/setup_multi_can.sh 4
-```
-
-### 启动多臂系统
-
-**使用配置文件（推荐）**:
-
-编辑 `rs_a3_description/config/multi_arm_config.yaml` 配置启用的机械臂：
-
-```yaml
-arms:
-  arm1:
-    prefix: "arm1_"
-    can_interface: "can0"
-    enabled: true
-  arm2:
-    prefix: "arm2_"
-    can_interface: "can1"
-    enabled: true
-```
-
-启动：
-```bash
-ros2 launch rs_a3_description multi_arm_control.launch.py
-```
-
-### 主从遥操作
-
-支持一对一、一对多、多对多的灵活主从映射。
-
-**一对一模式（简单）**:
-```bash
-# arm1 作为主臂，arm2 作为从臂
-ros2 launch rs_a3_teleop master_slave.launch.py master_ns:=arm1 slave_ns:=arm2
-```
-
-**一对多模式**:
-```bash
-# arm1 同时控制 arm2, arm3, arm4
-ros2 launch rs_a3_teleop master_slave.launch.py \
-    master_ns:=arm1 slave_ns_list:="arm2,arm3,arm4"
-```
-
-**使用配置文件（复杂映射）**:
-
-编辑 `rs_a3_description/config/master_slave_config.yaml`：
-
-```yaml
-mappings:
-  # 一对多映射
-  - master: "arm1"
-    slaves: ["arm2", "arm3"]
-    scale: 1.0
-    mirror: false
-    enabled: true
-    
-  # 镜像映射（左右手对称）
-  - master: "arm4"
-    slaves: ["arm5"]
-    mirror: true
-    enabled: true
-```
-
-启动：
-```bash
-ros2 launch rs_a3_teleop master_slave.launch.py \
-    config_file:=/path/to/master_slave_config.yaml
-```
-
-### 多臂 ROS2 接口
-
-启用 arm1 和 arm2 后的接口示例：
-
-| 类型 | arm1 | arm2 |
-|------|------|------|
-| 关节状态 | `/arm1/joint_states` | `/arm2/joint_states` |
-| 轨迹控制 | `/arm1/arm1_arm_controller/follow_joint_trajectory` | `/arm2/arm2_arm_controller/follow_joint_trajectory` |
-| 零力矩模式 | `/arm1/set_zero_torque_mode` | `/arm2/set_zero_torque_mode` |
-
----
-
 ## 控制参数
 
 ### 硬件接口参数 (`rs_a3_ros2_control.xacro`)
@@ -405,91 +311,143 @@ ros2 launch rs_a3_teleop master_slave.launch.py \
 
 重力补偿公式 (简化模型): `τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio`
 
-### Pinocchio 动力学重力补偿
+### 重力补偿系统
 
-系统支持基于 Pinocchio 库的完整动力学重力补偿，通过 RNEA 算法计算考虑所有关节级联效应的重力力矩。
+系统采用 **双模型架构**，支持简化三角函数模型和基于 Pinocchio 库的完整动力学 RNEA 模型。
+
+#### 架构概览
+
+```
+                     ┌──────────────────────────────┐
+                     │    rs_a3_hardware.cpp         │
+                     │    write() @ 200Hz            │
+                     └──────────┬───────────────────┘
+                                │
+                 ┌──────────────┼──────────────────┐
+                 │              │                   │
+          ┌──────▼──────┐  ┌───▼────────────┐  ┌──▼───────────────┐
+          │ 简化模型     │  │ Pinocchio RNEA │  │  零力矩模式       │
+          │ τ=A·sin+B·cos│  │ τ=RNEA(q,0,0) │  │  Kp=0, 100%补偿  │
+          │ +C (独立关节) │  │ (级联效应)     │  │  拖动示教/遥操作  │
+          └──────────────┘  └────────────────┘  └──────────────────┘
+```
+
+#### 模型1: 简化三角函数模型
+
+每个关节独立计算，不考虑其他关节姿态影响：
+
+```
+τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio
+```
+
+参数通过 `rs_a3_ros2_control.xacro` 配置：
+
+```xml
+<param name="gravity_comp_L2_sin">3.5</param>
+<param name="gravity_comp_L2_cos">0.0</param>
+<param name="gravity_comp_L2_offset">0.0</param>
+```
+
+**标定工具**: `scripts/gravity_calibration.py`（旧版简化标定）
+
+#### 模型2: Pinocchio RNEA 完整动力学模型（推荐）
+
+使用递归牛顿-欧拉算法 (RNEA)，考虑所有关节级联效应：
+
+```
+τ_gravity = RNEA(model, data, q, v=0, a=0)
+```
+
+**核心原理**：当速度和加速度均为零时，RNEA 逆动力学的输出即为各关节所需的重力补偿力矩。Pinocchio 通过 URDF 模型获取运动学链（DH参数、连杆几何），结合标定后的惯性参数（质量 `m` 和质心位置 `c`），从末端向基座递推计算每个关节承受的重力负载。
+
+**调用链路**：
+
+```
+on_init():
+  initPinocchioModel(urdf_path)           # 从 URDF 构建 Pinocchio 模型
+  loadCalibratedInertia(yaml_path)         # 从 YAML 加载标定的惯性参数
+  applyCalibratedInertiaToModel()          # 覆盖 L2-L6 的 mass 和 com
+
+write() @ 200Hz:
+  q = hw_positions_                        # 读取当前关节角度
+  τ = computePinocchioGravity(q)           # RNEA 计算重力力矩
+    → Eigen::VectorXd tau = pinocchio::rnea(model, data, q, 0, 0)
+    → gravity_torques[i] = tau[i] × direction[i]
+  
+  正常模式: cmd_torque = τ[i] × gravity_feedforward_ratio (50%)
+  零力矩模式: cmd_torque = τ[i] × 1.0 (100%)
+```
+
+**待标定参数（共12个）**：
+
+| 连杆 | 参数 | 说明 |
+|------|------|------|
+| L2 | mass, com_x | 大臂（2个参数），主要承重 |
+| L3 | mass, com_x, com_y | 小臂（3个参数）|
+| L4 | mass, com_x, com_y | 腕部 Roll（3个参数）|
+| L5 | mass, com_z | 腕部 Pitch（2个参数）|
+| L6 | mass, com_z | 末端 Yaw（2个参数）|
+
+> L1 绕 Z 轴旋转，不受重力影响，无需标定。
+
+#### Pinocchio 参数配置
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `use_pinocchio_gravity` | true | 启用 Pinocchio 完整动力学重力补偿 |
 | `urdf_path` | rs_a3.urdf | URDF 文件路径 |
 | `inertia_config_path` | inertia_params.yaml | 标定后的惯性参数配置文件 |
-| `zero_torque_kd` | 0.1 | 零力矩模式阻尼系数 |
+| `gravity_feedforward_ratio` | 0.5 | 正常模式重力前馈比例 (0~1) |
+
+#### 控制模式对比
+
+| 模式 | Kp | Kd | 速度 | 重力补偿 | 用途 |
+|------|----|----|------|----------|------|
+| 正常位置控制 | 80.0 | 4.0 | 差分前馈 | 50% | 精确位置跟踪 |
+| 重力补偿零力矩 | 0 | 关节独立 | 0 | 100% | 拖动示教 |
+| 纯零力矩 | 0 | 0 | 0 | 0 | 主从遥操作主臂 |
 
 ### 零力矩模式（拖动示教）
 
 零力矩模式下，位置控制 Kp=0，仅保留阻尼和重力补偿，允许手动拖动机械臂进行示教。
 
-#### 工作原理
-
-| 模式 | Kp | Kd | 重力补偿 | 用途 |
-|------|----|----|----------|------|
-| 正常位置控制 | 80.0 | 4.0 | 50% | 精确位置跟踪 |
-| 零力矩模式 | 0 | 0.1~0.5 | 100% | 手动拖动示教 |
-
 #### ROS2 服务接口
 
-**服务名称**: `/rs_a3/set_zero_torque_mode`  
-**服务类型**: `std_srvs/srv/SetBool`
+| 服务 | 类型 | 说明 |
+|------|------|------|
+| `/{ns}/set_zero_torque_mode` | `std_srvs/SetBool` | 重力补偿零力矩模式（拖动示教）|
+| `/{ns}/set_pure_zero_torque_mode` | `std_srvs/SetBool` | 纯零力矩模式（主从遥操作主臂）|
 
 ```bash
 # 启用零力矩模式
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+
+# 启用纯零力矩模式（遥操作主臂用）
+ros2 service call /arm1/set_pure_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
 
 # 关闭零力矩模式
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
+ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
 ```
 
-#### Python 接口示例
+#### 关节独立 Kp/Kd 配置
 
-```python
-import rclpy
-from rclpy.node import Node
-from std_srvs.srv import SetBool
-
-def set_zero_torque_mode(enable: bool):
-    """启用或关闭零力矩模式"""
-    rclpy.init()
-    node = Node('zero_torque_client')
-    client = node.create_client(SetBool, '/rs_a3/set_zero_torque_mode')
-    
-    if not client.wait_for_service(timeout_sec=5.0):
-        node.get_logger().error('服务不可用')
-        return False
-    
-    request = SetBool.Request()
-    request.data = enable
-    
-    future = client.call_async(request)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
-    
-    if future.done():
-        response = future.result()
-        print(f"成功: {response.success}, 消息: {response.message}")
-        return response.success
-    
-    node.destroy_node()
-    rclpy.shutdown()
-    return False
-
-# 使用示例
-set_zero_torque_mode(True)   # 启用
-set_zero_torque_mode(False)  # 关闭
-```
-
-#### 参数配置
-
-在 `rs_a3_ros2_control.xacro` 中配置阻尼系数：
+零力矩模式下各关节可独立配置阻尼，在 `rs_a3_ros2_control.xacro` 中设置：
 
 ```xml
-<param name="zero_torque_kd">0.1</param>  <!-- 零力矩模式阻尼系数 -->
+<param name="zero_torque_kp_L1">0.0</param>
+<param name="zero_torque_kd_L1">0.05</param>
+<param name="zero_torque_kd_L2">0.125</param>  <!-- 大臂，较高阻尼 -->
+<param name="zero_torque_kd_L3">0.15</param>
+<param name="zero_torque_kd_L4">0.15</param>
+<param name="zero_torque_kd_L5">0.02</param>
+<param name="zero_torque_kd_L6">0.02</param>
 ```
 
-| 参数值 | 手感 | 适用场景 |
-|--------|------|----------|
-| 0.1 | 轻柔，几乎无阻力 | 精细示教、轻负载 |
-| 0.2~0.3 | 适中阻尼 | 一般示教 |
-| 0.5 | 明显阻力 | 安全优先、重负载 |
+| Kd 范围 | 手感 | 适用场景 |
+|---------|------|----------|
+| 0.02~0.05 | 轻柔，几乎无阻力 | 精细示教、小关节 |
+| 0.1~0.15 | 适中阻尼 | 一般示教 |
+| 0.2~0.5 | 明显阻力 | 安全优先、大关节 |
 
 #### 注意事项
 
@@ -501,40 +459,46 @@ set_zero_torque_mode(False)  # 关闭
 
 ### 惯性参数标定
 
-系统提供自动惯性参数标定程序，通过在多个关节配置下采集力矩数据，拟合各连杆的质量和质心位置。
+系统提供自动惯性参数标定程序 (`scripts/inertia_calibration.py`)，通过 Pinocchio 动力学模型，在多个关节配置下采集力矩数据，使用最小二乘法拟合各连杆的质量和质心位置。
 
-#### 完整标定模式 (L2-L6)
+#### 标定算法
+
+```
+1. 生成测试配置（以 home 点为基准，在各关节限位范围内组合变化）
+2. 逐点移动机械臂，等待稳定后采集 40 次力矩样本取平均
+3. 构建优化问题:
+   min Σ_点 Σ_关节 (τ_measured - τ_pinocchio(q, params))²
+4. 使用 scipy L-BFGS-B 求解最优 mass 和 com 参数（有边界约束）
+5. 计算 RMSE 和 R² 评估拟合质量
+6. 保存到 YAML 配置文件
+```
+
+#### 标定模式
 
 ```bash
+# 完整标定 L2-L6 (~46个测试点，约10分钟)
+python3 scripts/inertia_calibration.py
+
 # 快速标定 (~20个测试点，约3分钟)
 python3 scripts/inertia_calibration.py --quick
-
-# 完整标定 (~46个测试点，约10分钟)
-python3 scripts/inertia_calibration.py
 
 # 高精度标定 (~80个测试点，约20分钟)
 python3 scripts/inertia_calibration.py --high
 
 # 超高精度标定 (~120个测试点，约35分钟)
 python3 scripts/inertia_calibration.py --ultra --samples 60
-```
 
-#### 腕部标定模式 (L4-L6)
-
-当末端负载变化时（如更换夹爪），可只重新标定腕部关节，保留已标定的 L2/L3 参数：
-
-```bash
-# 腕部精细标定 (~65个测试点)
+# 腕部标定 L4-L6（保留 L2/L3，负载变化时用）
 python3 scripts/inertia_calibration.py --wrist
 
-# 腕部标定 + 增加采样次数
-python3 scripts/inertia_calibration.py --wrist --samples 60
+# L2-L5 联合标定（固定 L6 为 URDF 值）
+python3 scripts/inertia_calibration.py --combo --samples 50
 ```
 
 #### 标定流程
 
 1. **启动控制器**: `ros2 launch rs_a3_description rs_a3_control.launch.py`
-2. **运行标定程序**: 程序会自动移动机械臂到各测试点采集数据
+2. **运行标定程序**: 程序自动移动机械臂到各测试点采集数据
 3. **等待完成**: 标定完成后自动保存参数并返回 home 位置
 4. **重启控制器**: 重启后自动加载新参数
 
@@ -545,18 +509,18 @@ python3 scripts/inertia_calibration.py --wrist --samples 60
 ```yaml
 inertia_params:
   L2:
-    mass: 1.1522        # 质量 (kg)
-    com: [0.077, 0.0, 0.0]  # 质心位置 (m)
+    mass: 0.9106         # 质量 (kg)
+    com: [0.087, 0.0, 0.0]  # 质心位置 (m)
   L3:
-    mass: 0.1472
-    com: [-0.058, 0.002, 0.003]
+    mass: 0.3747
+    com: [-0.080, 0.033, 0.003]
   # ... L4, L5, L6
 
 calibration_info:
-  date: "2026-01-23 18:42:27"
-  num_samples: 133
-  rmse: 0.0650          # 拟合误差 (Nm)
-  r_squared: 0.9909     # 拟合优度
+  date: "2026-02-04 18:59:19"
+  num_samples: 115
+  rmse: 0.0793            # 拟合误差 (Nm)
+  r_squared: 0.9952       # 拟合优度
 ```
 
 #### 标定参数说明
@@ -647,376 +611,6 @@ base_link
 │               └── L5_joint → part_9
 │                   └── L6_joint → l5_l6_urdf_asm
 │                       └── end_effector
-```
-
----
-
-## 控制 API
-
-本节提供机械臂控制的编程接口说明和代码示例。
-
-### 关节配置
-
-| 关节 | 范围 (rad) | 范围 (°) | 力矩限制 |
-|------|-----------|----------|----------|
-| L1_joint | [-2.79, 2.79] | [-160°, 160°] | ±14 Nm |
-| L2_joint | [0.0, 3.67] | [0°, 210°] | ±14 Nm |
-| L3_joint | [-4.01, 0.0] | [-230°, 0°] | ±14 Nm |
-| L4_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
-| L5_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
-| L6_joint | [-1.57, 1.57] | [-90°, 90°] | ±5.5 Nm |
-
-**常用位置定义：**
-```python
-HOME_POSITION = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]  # home 位置
-ZERO_POSITION = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]       # 零位
-JOINT_NAMES = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
-```
-
-### 轨迹执行 API
-
-使用 `FollowJointTrajectory` Action 执行关节空间轨迹。
-
-**基本使用示例：**
-
-```python
-#!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionClient
-from control_msgs.action import FollowJointTrajectory
-from trajectory_msgs.msg import JointTrajectoryPoint
-from builtin_interfaces.msg import Duration
-
-class ArmController(Node):
-    def __init__(self):
-        super().__init__('arm_controller_example')
-        self.joint_names = ['L1_joint', 'L2_joint', 'L3_joint',
-                           'L4_joint', 'L5_joint', 'L6_joint']
-        self.action_client = ActionClient(
-            self, FollowJointTrajectory,
-            '/arm_controller/follow_joint_trajectory')
-        self.action_client.wait_for_server()
-    
-    def move_to(self, positions, duration=3.0):
-        """移动到指定关节位置
-        
-        Args:
-            positions: 6个关节的目标位置 (rad)
-            duration: 运动时间 (秒)
-        Returns:
-            bool: 是否成功
-        """
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory.joint_names = self.joint_names
-        
-        point = JointTrajectoryPoint()
-        point.positions = positions
-        point.velocities = [0.0] * 6
-        point.time_from_start = Duration(sec=int(duration), 
-                                         nanosec=int((duration % 1) * 1e9))
-        goal.trajectory.points = [point]
-        
-        future = self.action_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, future)
-        
-        goal_handle = future.result()
-        if goal_handle.accepted:
-            result_future = goal_handle.get_result_async()
-            rclpy.spin_until_future_complete(self, result_future)
-            return result_future.result().result.error_code == 0
-        return False
-
-def main():
-    rclpy.init()
-    arm = ArmController()
-    
-    # 移动到 home 位置
-    arm.move_to([0.0, 0.785, -0.785, 0.0, 0.0, 0.0], duration=3.0)
-    
-    # 移动 L1 关节
-    arm.move_to([0.5, 0.785, -0.785, 0.0, 0.0, 0.0], duration=2.0)
-    
-    arm.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
-```
-
-**多点轨迹示例：**
-
-```python
-def move_through_points(self, waypoints, durations):
-    """执行多点轨迹
-    
-    Args:
-        waypoints: 轨迹点列表，每个点是6个关节位置
-        durations: 每段运动的时间
-    """
-    goal = FollowJointTrajectory.Goal()
-    goal.trajectory.joint_names = self.joint_names
-    
-    total_time = 0.0
-    for positions, duration in zip(waypoints, durations):
-        total_time += duration
-        point = JointTrajectoryPoint()
-        point.positions = positions
-        point.velocities = [0.0] * 6
-        point.time_from_start = Duration(sec=int(total_time), 
-                                         nanosec=int((total_time % 1) * 1e9))
-        goal.trajectory.points.append(point)
-    
-    future = self.action_client.send_goal_async(goal)
-    # ... 等待完成
-```
-
-### 关节状态读取 API
-
-订阅 `/joint_states` 话题获取实时关节状态。
-
-```python
-from sensor_msgs.msg import JointState
-
-class JointStateMonitor(Node):
-    def __init__(self):
-        super().__init__('joint_state_monitor')
-        self.positions = {}
-        self.velocities = {}
-        self.efforts = {}
-        
-        self.subscription = self.create_subscription(
-            JointState, '/joint_states', self.callback, 10)
-    
-    def callback(self, msg):
-        self.positions = dict(zip(msg.name, msg.position))
-        self.velocities = dict(zip(msg.name, msg.velocity))
-        self.efforts = dict(zip(msg.name, msg.effort))
-    
-    def get_joint_position(self, joint_name):
-        """获取单个关节位置"""
-        return self.positions.get(joint_name, None)
-    
-    def get_all_positions(self):
-        """获取所有关节位置"""
-        return [self.positions.get(f'L{i}_joint', 0.0) for i in range(1, 7)]
-```
-
-### 零力矩模式 API
-
-通过 ROS2 服务启用/禁用零力矩模式（拖动示教）。
-
-```python
-from std_srvs.srv import SetBool
-
-class ZeroTorqueController(Node):
-    def __init__(self):
-        super().__init__('zero_torque_controller')
-        self.client = self.create_client(SetBool, '/rs_a3/set_zero_torque_mode')
-        self.client.wait_for_service(timeout_sec=5.0)
-    
-    def enable(self):
-        """启用零力矩模式"""
-        return self._call(True)
-    
-    def disable(self):
-        """禁用零力矩模式"""
-        return self._call(False)
-    
-    def _call(self, enable: bool):
-        request = SetBool.Request()
-        request.data = enable
-        future = self.client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        if future.done():
-            return future.result().success
-        return False
-
-# 使用示例
-controller = ZeroTorqueController()
-controller.enable()   # 启用拖动示教
-# ... 手动拖动机械臂 ...
-controller.disable()  # 恢复位置控制
-```
-
-**命令行使用：**
-
-```bash
-# 启用零力矩模式
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
-
-# 禁用零力矩模式
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
-```
-
-### 调试话题 API
-
-系统提供多个调试话题用于监控和分析。
-
-| 话题 | 类型 | 频率 | 内容 |
-|------|------|------|------|
-| `/debug/hw_command` | JointState | 20Hz | 原始位置命令 |
-| `/debug/smoothed_command` | JointState | 20Hz | 平滑后命令 |
-| `/debug/gravity_torque` | JointState | 20Hz | 重力补偿力矩 |
-| `/debug/motor_temperature` | JointState | 4Hz | 电机温度 (°C) |
-
-**监控示例：**
-
-```python
-def gravity_torque_callback(msg):
-    """监控重力补偿力矩"""
-    torques = dict(zip(msg.name, msg.effort))
-    print(f"L2 重力补偿: {torques.get('L2_joint', 0):.2f} Nm")
-
-subscription = node.create_subscription(
-    JointState, '/debug/gravity_torque', gravity_torque_callback, 10)
-```
-
-### 完整控制示例
-
-以下是一个综合使用各种 API 的完整示例：
-
-```python
-#!/usr/bin/env python3
-"""RS-A3 机械臂控制完整示例"""
-import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionClient
-from control_msgs.action import FollowJointTrajectory
-from trajectory_msgs.msg import JointTrajectoryPoint
-from sensor_msgs.msg import JointState
-from std_srvs.srv import SetBool
-from builtin_interfaces.msg import Duration
-import time
-
-class RsA3Controller(Node):
-    """RS-A3 机械臂控制器"""
-    
-    JOINT_NAMES = ['L1_joint', 'L2_joint', 'L3_joint', 
-                   'L4_joint', 'L5_joint', 'L6_joint']
-    HOME = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]
-    ZERO = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    
-    def __init__(self):
-        super().__init__('rs_a3_controller')
-        
-        # Action 客户端
-        self.traj_client = ActionClient(
-            self, FollowJointTrajectory,
-            '/arm_controller/follow_joint_trajectory')
-        
-        # 服务客户端
-        self.zero_torque_client = self.create_client(
-            SetBool, '/rs_a3/set_zero_torque_mode')
-        
-        # 状态订阅
-        self.current_positions = [0.0] * 6
-        self.create_subscription(
-            JointState, '/joint_states', self._joint_state_cb, 10)
-        
-        # 等待服务就绪
-        self.traj_client.wait_for_server(timeout_sec=10.0)
-        self.zero_torque_client.wait_for_service(timeout_sec=5.0)
-        self.get_logger().info('控制器初始化完成')
-    
-    def _joint_state_cb(self, msg):
-        positions = dict(zip(msg.name, msg.position))
-        self.current_positions = [
-            positions.get(name, 0.0) for name in self.JOINT_NAMES]
-    
-    def move_to(self, positions, duration=3.0, wait=True):
-        """移动到目标位置"""
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory.joint_names = self.JOINT_NAMES
-        
-        point = JointTrajectoryPoint()
-        point.positions = positions
-        point.velocities = [0.0] * 6
-        point.time_from_start = Duration(
-            sec=int(duration), nanosec=int((duration % 1) * 1e9))
-        goal.trajectory.points = [point]
-        
-        future = self.traj_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, future)
-        
-        if wait and future.result().accepted:
-            result_future = future.result().get_result_async()
-            rclpy.spin_until_future_complete(self, result_future)
-            return result_future.result().result.error_code == 0
-        return future.result().accepted
-    
-    def go_home(self, duration=3.0):
-        """回到 home 位置"""
-        return self.move_to(self.HOME, duration)
-    
-    def go_zero(self, duration=3.0):
-        """回到零位"""
-        return self.move_to(self.ZERO, duration)
-    
-    def set_zero_torque(self, enable: bool):
-        """设置零力矩模式"""
-        req = SetBool.Request()
-        req.data = enable
-        future = self.zero_torque_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        return future.result().success if future.done() else False
-    
-    def get_positions(self):
-        """获取当前关节位置"""
-        return self.current_positions.copy()
-
-def main():
-    rclpy.init()
-    arm = RsA3Controller()
-    
-    try:
-        # 1. 移动到 home 位置
-        print("移动到 home 位置...")
-        arm.go_home()
-        
-        # 2. 执行简单运动
-        print("执行测试运动...")
-        arm.move_to([0.3, 0.785, -0.785, 0.0, 0.0, 0.0], duration=2.0)
-        arm.move_to([0.0, 1.0, -1.0, 0.3, 0.3, 0.0], duration=2.0)
-        
-        # 3. 启用零力矩模式
-        print("启用零力矩模式，可以手动拖动...")
-        arm.set_zero_torque(True)
-        time.sleep(5.0)  # 手动拖动时间
-        
-        # 4. 禁用零力矩并读取位置
-        arm.set_zero_torque(False)
-        print(f"当前位置: {arm.get_positions()}")
-        
-        # 5. 回到 home
-        arm.go_home()
-        print("完成!")
-        
-    finally:
-        arm.destroy_node()
-        rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
-```
-
-### 命令行工具
-
-```bash
-# 查看关节状态
-ros2 topic echo /joint_states
-
-# 查看重力补偿力矩
-ros2 topic echo /debug/gravity_torque
-
-# 查看电机温度
-ros2 topic echo /debug/motor_temperature
-
-# 列出可用服务
-ros2 service list | grep rs_a3
-
-# 列出控制器
-ros2 control list_controllers
 ```
 
 ---
@@ -1152,71 +746,133 @@ colcon build --symlink-install
 
 ```
 /home/wy/RS/A3/
-├── README.md                      # 本文档
-├── 电机通信协议汇总.md              # 电机通信协议详细说明
+├── README.md                          # 本文档
+├── 电机通信协议汇总.md                  # 电机通信协议详细说明
 │
-├── ros2_ws/                       # ROS2 工作空间
-│   └── src/
-│       ├── rs_a3_description/     # 机器人描述包
-│       │   ├── urdf/
-│       │   │   ├── rs_a3.urdf.xacro           # URDF 主文件
-│       │   │   └── rs_a3_ros2_control.xacro   # ros2_control 配置
-│       │   ├── config/
-│       │   │   ├── rs_a3_controllers.yaml     # 控制器参数
-│       │   │   └── rs_a3_view.rviz            # RViz 配置
-│       │   ├── launch/
-│       │   │   └── rs_a3_control.launch.py
-│       │   └── meshes/                        # 3D 模型文件
-│       │
-│       ├── rs_a3_hardware/        # 硬件接口包
-│       │   ├── include/rs_a3_hardware/
-│       │   │   ├── rs_a3_hardware.hpp         # 硬件接口头文件
-│       │   │   ├── robstride_can_driver.hpp   # CAN 驱动头文件
-│       │   │   └── s_curve_generator.hpp      # S曲线轨迹生成器
-│       │   ├── src/
-│       │   │   ├── rs_a3_hardware.cpp         # 硬件接口实现
-│       │   │   ├── robstride_can_driver.cpp   # CAN 驱动实现
-│       │   │   └── s_curve_generator.cpp      # S曲线轨迹生成器实现
-│       │   └── rs_a3_hardware_plugin.xml      # 插件描述
-│       │
-│       ├── rs_a3_moveit_config/   # MoveIt 配置包
-│       │   ├── config/
-│       │   │   ├── rs_a3.srdf                 # 语义机器人描述
-│       │   │   ├── kinematics.yaml            # 运动学求解器配置
-│       │   │   ├── joint_limits.yaml          # 关节限制
-│       │   │   ├── ompl_planning.yaml         # OMPL 规划器配置
-│       │   │   └── moveit_controllers.yaml    # MoveIt 控制器配置
-│       │   └── launch/
-│       │       ├── demo.launch.py             # 仿真演示
-│       │       └── robot.launch.py            # 真实硬件
-│       │
-│       └── rs_a3_teleop/          # 手柄遥控包
-│           ├── config/
-│           │   └── xbox_teleop.yaml           # 手柄参数配置
-│           ├── launch/
-│           │   ├── real_teleop.launch.py      # 真实硬件遥控
-│           │   ├── sim_teleop.launch.py       # 仿真环境遥控
-│           │   └── complete_teleop.launch.py  # 完整遥控启动
-│           └── rs_a3_teleop/
-│               └── xbox_teleop_node.py        # 手柄控制节点
+├── rs_a3_description/                 # 机器人描述包（URDF、配置、Launch）
+│   ├── urdf/
+│   │   ├── rs_a3.urdf.xacro              # URDF 主文件（宏定义）
+│   │   ├── rs_a3.urdf                     # 编译后的 URDF
+│   │   └── rs_a3_ros2_control.xacro       # ros2_control 硬件接口配置
+│   ├── config/
+│   │   ├── rs_a3_controllers.yaml         # 单臂控制器参数
+│   │   ├── multi_arm_controllers.yaml     # 多臂控制器参数
+│   │   ├── multi_arm_config.yaml          # 多臂 CAN 接口和命名空间配置
+│   │   ├── master_slave_config.yaml       # 主从遥操作映射配置
+│   │   ├── inertia_params.yaml            # 标定后的惯性参数（arm1/通用）
+│   │   ├── inertia_params_arm2.yaml       # arm2 独立标定的惯性参数
+│   │   └── rs_a3_view.rviz               # RViz 可视化配置
+│   ├── launch/
+│   │   ├── rs_a3_control.launch.py        # 单臂控制系统启动
+│   │   └── multi_arm_control.launch.py    # 多臂控制系统启动
+│   └── meshes/                            # 3D 模型文件 (STL)
 │
-├── scripts/                       # 实用脚本
-│   ├── setup_can.sh               # CAN 接口设置
-│   ├── install_deps.sh            # 依赖安装
-│   ├── install_xpadneo.sh         # Xbox 蓝牙驱动安装
-│   ├── setup_bluetooth_xbox.sh    # 蓝牙手柄配置
-│   ├── start_real_xbox_control.sh # 一键启动脚本
-│   ├── move_to_zero.py            # 移动到零位
-│   ├── simple_motion_test.py      # 简单运动测试
-│   └── foxglove_bridge.service    # Foxglove 远程可视化服务
+├── rs_a3_hardware/                    # ROS2 Control 硬件接口包
+│   ├── include/rs_a3_hardware/
+│   │   ├── rs_a3_hardware.hpp             # 硬件接口头文件
+│   │   ├── robstride_can_driver.hpp       # CAN 驱动头文件
+│   │   └── s_curve_generator.hpp          # S曲线轨迹生成器
+│   ├── src/
+│   │   ├── rs_a3_hardware.cpp             # 硬件接口实现（Pinocchio重力补偿、零力矩模式）
+│   │   ├── robstride_can_driver.cpp       # CAN 通信驱动实现
+│   │   └── s_curve_generator.cpp          # S曲线轨迹生成器实现
+│   └── rs_a3_hardware_plugin.xml          # 插件描述
 │
-├── RS_A3_urdf/                    # 原始 URDF 和 mesh 文件
+├── rs_a3_moveit_config/               # MoveIt2 运动规划配置包
+│   ├── config/
+│   │   ├── rs_a3.srdf                     # 语义机器人描述
+│   │   ├── kinematics.yaml                # 运动学求解器配置
+│   │   ├── joint_limits.yaml              # 关节限制
+│   │   ├── ompl_planning.yaml             # OMPL 规划器配置
+│   │   ├── moveit_controllers.yaml        # MoveIt 控制器配置
+│   │   └── servo_config.yaml              # MoveIt Servo 配置
+│   └── launch/
+│       ├── demo.launch.py                 # 仿真演示
+│       └── robot.launch.py                # 真实硬件 + MoveIt
 │
-└── 文档/
-    ├── XBOX_CONTROL_SETUP.md      # Xbox 控制详细设置
-    ├── XBOX_HOW_TO_USE.md         # Xbox 使用指南
-    ├── BLUETOOTH_XBOX_SETUP.md    # 蓝牙设置指南
-    └── XBOX_QUICK_FIX.md          # 快速修复指南
+├── ros2_ws/src/                       # ROS2 工作空间（Python 包）
+│   ├── rs_a3_teleop/                  # 遥操作包
+│   │   ├── config/
+│   │   │   ├── xbox_teleop.yaml           # Xbox 手柄笛卡尔控制参数
+│   │   │   ├── xbox_servo_teleop.yaml     # Xbox + MoveIt Servo 参数
+│   │   │   └── joycon_imu_teleop.yaml     # JoyCon IMU 遥操作参数
+│   │   ├── launch/
+│   │   │   ├── real_teleop.launch.py      # 真实硬件 Xbox 遥控
+│   │   │   ├── sim_teleop.launch.py       # 仿真环境遥控
+│   │   │   ├── complete_teleop.launch.py  # 完整遥控启动
+│   │   │   ├── master_slave.launch.py     # 主从遥操作启动
+│   │   │   ├── xbox_servo_teleop.launch.py # Xbox Servo 模式
+│   │   │   └── joycon_imu_teleop.launch.py # JoyCon IMU 模式
+│   │   └── rs_a3_teleop/
+│   │       ├── xbox_teleop_node.py        # Xbox 笛卡尔控制节点
+│   │       ├── master_slave_node.py       # 主从遥操作节点（一对多/多对多）
+│   │       ├── xbox_servo_node.py         # Xbox Servo 控制节点
+│   │       └── joycon_imu_teleop_node.py  # JoyCon IMU 遥操作节点
+│   │
+│   ├── rs_a3_vision/                  # 视觉抓取包
+│   │   ├── config/
+│   │   │   ├── vision_config.yaml         # 视觉参数配置
+│   │   │   └── hand_eye_calibration.yaml  # 手眼标定配置
+│   │   ├── launch/
+│   │   │   ├── camera_only.launch.py      # 仅相机启动
+│   │   │   ├── vision_grasp.launch.py     # 视觉抓取启动
+│   │   │   └── full_grasp_system.launch.py # 完整抓取系统
+│   │   └── rs_a3_vision/
+│   │       ├── camera_node.py             # 相机节点
+│   │       ├── object_detector.py         # 物体检测节点
+│   │       ├── grasp_manager.py           # 抓取管理器
+│   │       ├── visual_servo.py            # 视觉伺服
+│   │       └── hand_eye_calibration.py    # 手眼标定
+│   │
+│   ├── rs_a3_web_ui/                  # Web 可视化控制界面
+│   │   ├── rs_a3_web_ui/
+│   │   │   ├── web_server.py              # Flask Web 服务器
+│   │   │   └── ros2_bridge.py             # ROS2 桥接
+│   │   ├── templates/index.html           # Web 页面
+│   │   └── static/                        # 前端资源 (JS/CSS/STL)
+│   │
+│   └── rs_a3_grasp_gui/              # 抓取 GUI 包
+│       └── rs_a3_grasp_gui/
+│           └── grasp_gui_node.py          # 抓取 GUI 节点
+│
+├── scripts/                           # 实用脚本与标定工具
+│   ├── 标定工具/
+│   │   ├── inertia_calibration.py             # Pinocchio 惯性参数标定（推荐）
+│   │   ├── pinocchio_gravity_calibration.py   # Pinocchio 重力标定
+│   │   ├── gravity_calibration.py             # 简化三角函数重力标定（旧版）
+│   │   ├── gravity_calibration_analyzer.py    # 标定数据分析工具
+│   │   └── GRAVITY_CALIBRATION_README.md      # 旧版标定使用说明
+│   ├── 遥操作/
+│   │   ├── teleop_master_slave.py             # 独立主从遥操作脚本
+│   │   ├── test_teleop_can0_can1.py           # 双臂遥操作测试
+│   │   └── test_teleop_can1_master.py         # can1 主臂遥操作测试
+│   ├── 环境配置/
+│   │   ├── setup_can.sh                       # CAN 接口设置
+│   │   ├── setup_multi_can.sh                 # 多 CAN 接口批量设置
+│   │   ├── install_deps.sh                    # ROS2 依赖安装
+│   │   ├── install_xpadneo.sh                 # Xbox 蓝牙驱动安装
+│   │   ├── install_vision_deps.sh             # 视觉依赖安装
+│   │   └── setup_bluetooth_xbox.sh            # 蓝牙手柄配置
+│   ├── 启动脚本/
+│   │   ├── start_real_xbox_control.sh         # 一键启动 Xbox 实机控制
+│   │   ├── start_teleop.sh                    # 遥操作启动脚本
+│   │   └── start_web_ui.sh                    # Web UI 启动
+│   ├── 测试工具/
+│   │   ├── move_to_zero.py                    # 移动到零位
+│   │   ├── simple_motion_test.py              # 简单运动测试
+│   │   ├── zero_test.py                       # 零位测试
+│   │   ├── test_kp_values.py                  # Kp 参数测试
+│   │   └── test_single_move.py                # 单步运动测试
+│   └── foxglove_bridge.service                # Foxglove 远程可视化服务
+│
+├── EDULITE-A3/                        # 机械臂 3D 模型文件 (STEP/STL)
+├── RS_A3_urdf/                        # 原始 URDF 和 mesh 文件
+│
+├── ACTIVATE_XBOX_CONTROLLER.md        # Xbox 手柄激活说明
+├── XBOX_CONTROL_SETUP.md              # Xbox 控制详细设置
+├── XBOX_HOW_TO_USE.md                 # Xbox 使用指南
+├── BLUETOOTH_XBOX_SETUP.md            # 蓝牙设置指南
+└── XBOX_QUICK_FIX.md                  # 快速修复指南
 ```
 
 ---
@@ -1225,11 +881,16 @@ colcon build --symlink-install
 
 | 脚本 | 功能 | 使用方法 |
 |------|------|----------|
-| `setup_can.sh` | 设置 CAN 接口 | `sudo ./setup_can.sh can0 1000000` |
+| `setup_can.sh` | 设置单个 CAN 接口 | `sudo ./setup_can.sh can0 1000000` |
+| `setup_multi_can.sh` | 批量设置多个 CAN | `sudo ./setup_multi_can.sh 4` |
 | `install_deps.sh` | 安装 ROS2 依赖 | `sudo ./install_deps.sh` |
 | `install_xpadneo.sh` | 安装 Xbox 蓝牙驱动 | `./install_xpadneo.sh` |
 | `setup_bluetooth_xbox.sh` | 配置蓝牙手柄 | `./setup_bluetooth_xbox.sh` |
-| `start_real_xbox_control.sh` | 一键启动实机控制 | `./start_real_xbox_control.sh can0` |
+| `start_real_xbox_control.sh` | 一键启动 Xbox 实机控制 | `./start_real_xbox_control.sh can0` |
+| `start_teleop.sh` | 启动遥操作 | `./start_teleop.sh` |
+| `inertia_calibration.py` | Pinocchio 惯性参数标定 | `python3 inertia_calibration.py [--quick\|--high\|--ultra\|--wrist\|--combo]` |
+| `teleop_master_slave.py` | 独立主从遥操作 | `python3 teleop_master_slave.py` |
+| `test_teleop_can0_can1.py` | 双臂遥操作测试 | `python3 test_teleop_can0_can1.py` |
 | `move_to_zero.py` | 移动机械臂到零位 | `python3 move_to_zero.py` |
 | `simple_motion_test.py` | 简单运动测试 | `python3 simple_motion_test.py` |
 
@@ -1272,4 +933,4 @@ Apache-2.0
 
 ---
 
-**最后更新**: 2026-02-04
+**最后更新**: 2026-02-05

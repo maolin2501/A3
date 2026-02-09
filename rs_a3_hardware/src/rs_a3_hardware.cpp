@@ -247,32 +247,10 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     }
   }
   
-  // 读取零力矩模式Kd参数（默认值）
+  // 读取零力矩模式Kd参数
   if (info_.hardware_parameters.count("zero_torque_kd")) {
     zero_torque_kd_ = std::stod(info_.hardware_parameters.at("zero_torque_kd"));
   }
-  
-  // 读取零力矩模式关节独立 Kp/Kd 参数
-  zero_torque_kp_joints_.resize(joint_configs_.size(), 0.0);  // 默认 Kp=0
-  zero_torque_kd_joints_.resize(joint_configs_.size(), zero_torque_kd_);  // 默认使用全局 Kd
-  for (size_t i = 0; i < joint_configs_.size(); ++i) {
-    std::string kp_key = "zero_torque_kp_L" + std::to_string(i + 1);
-    std::string kd_key = "zero_torque_kd_L" + std::to_string(i + 1);
-    if (info_.hardware_parameters.count(kp_key)) {
-      zero_torque_kp_joints_[i] = std::stod(info_.hardware_parameters.at(kp_key));
-    }
-    if (info_.hardware_parameters.count(kd_key)) {
-      zero_torque_kd_joints_[i] = std::stod(info_.hardware_parameters.at(kd_key));
-    }
-  }
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Zero torque mode joint Kp: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
-              zero_torque_kp_joints_[0], zero_torque_kp_joints_[1], zero_torque_kp_joints_[2],
-              zero_torque_kp_joints_[3], zero_torque_kp_joints_[4], zero_torque_kp_joints_[5]);
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Zero torque mode joint Kd: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
-              zero_torque_kd_joints_[0], zero_torque_kd_joints_[1], zero_torque_kd_joints_[2],
-              zero_torque_kd_joints_[3], zero_torque_kd_joints_[4], zero_torque_kd_joints_[5]);
   
   // ============ Pinocchio 动力学模型初始化 ============
   // 读取 URDF 路径
@@ -920,9 +898,9 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     double final_cmd_position;
     
     if (zero_torque_mode_) {
-      // 零力矩模式: 使用关节独立的 Kp/Kd，仅重力补偿（100%用于零力矩模式）
-      motor_kp = std::clamp(zero_torque_kp_joints_[i], 0.0, 500.0);
-      motor_kd = std::clamp(zero_torque_kd_joints_[i], 0.0, 5.0);
+      // 零力矩模式: Kp=0, Kd=阻尼, 仅重力补偿（100%用于零力矩模式）
+      motor_kp = 0.0;
+      motor_kd = std::clamp(zero_torque_kd_, 0.0, 5.0);
       
       // 零力矩模式使用100%重力补偿
       if (use_pinocchio_gravity_ && pinocchio_initialized_ && i < pinocchio_gravity_torques.size()) {
@@ -1038,12 +1016,8 @@ void RsA3HardwareInterface::zeroTorqueModeCallback(
   
   if (zero_torque_mode_) {
     RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                "ZERO TORQUE MODE ENABLED! Joint Kp=[%.1f,%.1f,%.1f,%.1f,%.1f,%.1f], Kd=[%.1f,%.1f,%.1f,%.1f,%.1f,%.1f], Gravity Comp=%s",
-                zero_torque_kp_joints_[0], zero_torque_kp_joints_[1], zero_torque_kp_joints_[2],
-                zero_torque_kp_joints_[3], zero_torque_kp_joints_[4], zero_torque_kp_joints_[5],
-                zero_torque_kd_joints_[0], zero_torque_kd_joints_[1], zero_torque_kd_joints_[2],
-                zero_torque_kd_joints_[3], zero_torque_kd_joints_[4], zero_torque_kd_joints_[5],
-                gravity_comp_enabled_ ? "ON" : "OFF");
+                "ZERO TORQUE MODE ENABLED! Kp=0, Kd=%.1f, Gravity Comp=%s",
+                zero_torque_kd_, gravity_comp_enabled_ ? "ON" : "OFF");
     response->message = "Zero torque mode enabled - robot can be manually moved";
   } else {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),

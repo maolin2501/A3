@@ -6,6 +6,7 @@ RS-A3 多机械臂控制 Launch 文件
 
 import os
 import yaml
+import tempfile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, GroupAction
 from launch.conditions import IfCondition
@@ -52,6 +53,10 @@ def generate_arm_nodes(context, *args, **kwargs):
         can_interface = arm_cfg.get('can_interface', 'can0')
         host_can_id = arm_cfg.get('host_can_id', 253)
         
+        # 惯性参数配置文件路径（每个机械臂可以独立配置）
+        default_inertia_path = '/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml'
+        inertia_config_path = arm_cfg.get('inertia_config_path', default_inertia_path)
+        
         # 生成带前缀的 URDF
         robot_description_content = Command([
             PathJoinSubstitution([FindExecutable(name="xacro")]),
@@ -63,12 +68,13 @@ def generate_arm_nodes(context, *args, **kwargs):
             f" use_mock_hardware:={'true' if use_mock else 'false'}",
             f" can_interface:={can_interface}",
             f" host_can_id:={host_can_id}",
+            f" inertia_config_path:={inertia_config_path}",
         ])
         
         robot_description = {"robot_description": robot_description_content}
         
-        # 生成控制器配置
-        controller_params = generate_controller_params(prefix, global_config.get('update_rate', 200))
+        # 生成控制器配置文件
+        controller_params_file = generate_controller_params(prefix, arm_name, global_config.get('update_rate', 200))
         
         # 创建节点组（带命名空间）
         arm_group = GroupAction([
@@ -78,7 +84,7 @@ def generate_arm_nodes(context, *args, **kwargs):
             Node(
                 package="controller_manager",
                 executable="ros2_control_node",
-                parameters=[robot_description, controller_params],
+                parameters=[robot_description, controller_params_file],
                 output="both",
                 remappings=[
                     ("~/robot_description", f"/{arm_name}/robot_description"),
@@ -136,24 +142,32 @@ def generate_arm_nodes(context, *args, **kwargs):
     return nodes
 
 
-def generate_controller_params(prefix: str, update_rate: int) -> dict:
-    """生成控制器参数配置"""
+def generate_controller_params(prefix: str, arm_name: str, update_rate: int) -> str:
+    """生成控制器参数配置文件（包含7个关节，含夹爪L7）
     
-    joints = [f"{prefix}L{i}_joint" for i in range(1, 7)]
+    返回临时 YAML 文件路径
+    """
     
-    return {
-        "controller_manager": {
+    joints = [f"{prefix}L{i}_joint" for i in range(1, 8)]  # L1-L7，含夹爪
+    
+    # 控制器名称（带前缀）
+    jsb_name = f"{prefix}joint_state_broadcaster"
+    ctrl_name = f"{prefix}arm_controller"
+    
+    # 使用完整命名空间路径的参数结构
+    params = {
+        f"/{arm_name}/controller_manager": {
             "ros__parameters": {
                 "update_rate": update_rate,
-                f"{prefix}joint_state_broadcaster": {
+                jsb_name: {
                     "type": "joint_state_broadcaster/JointStateBroadcaster"
                 },
-                f"{prefix}arm_controller": {
+                ctrl_name: {
                     "type": "joint_trajectory_controller/JointTrajectoryController"
                 }
             }
         },
-        f"{prefix}arm_controller": {
+        f"/{arm_name}/{ctrl_name}": {
             "ros__parameters": {
                 "joints": joints,
                 "command_interfaces": ["position"],
@@ -171,6 +185,13 @@ def generate_controller_params(prefix: str, update_rate: int) -> dict:
             }
         }
     }
+    
+    # 保存为临时 YAML 文件
+    fd, path = tempfile.mkstemp(prefix=f'{arm_name}_controllers_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as f:
+        yaml.dump(params, f, default_flow_style=False)
+    
+    return path
 
 
 def generate_launch_description():
