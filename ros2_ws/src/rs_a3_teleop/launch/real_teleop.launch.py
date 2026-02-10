@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-实机Xbox手柄控制启动文件
-使用真实硬件而非仿真
+Real Hardware Xbox Controller Launch File
+Uses real hardware instead of simulation
 """
 
 from launch import LaunchDescription
@@ -13,7 +13,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 声明启动参数
+    # Declare launch arguments
     can_interface_arg = DeclareLaunchArgument(
         'can_interface',
         default_value='can0',
@@ -32,13 +32,13 @@ def generate_launch_description():
         description='Joystick device path'
     )
     
-    # 包含MoveIt实机启动文件
+    # Include MoveIt real hardware launch file
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare('rs_a3_moveit_config'),
                 'launch',
-                'robot.launch.py'  # 使用实机launch文件
+                'robot.launch.py'  # Use real hardware launch file
             ])
         ]),
         launch_arguments={
@@ -47,7 +47,7 @@ def generate_launch_description():
         }.items()
     )
     
-    # Joy节点
+    # Joy node
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -60,7 +60,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Xbox Teleop节点
+    # Xbox Teleop node
     xbox_teleop_node = Node(
         package='rs_a3_teleop',
         executable='xbox_teleop_node',

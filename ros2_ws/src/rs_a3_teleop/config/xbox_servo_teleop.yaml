@@ -1,21 +1,20 @@
-# Xbox手柄伺服控制参数配置
+# Xbox controller servo control parameter configuration
 
 xbox_servo_teleop_node:
   ros__parameters:
-    # 线性速度缩放因子 (m/s)
-    # 摇杆完全推到底时的最大速度
+    # Linear velocity scale factor (m/s)
+    # Maximum speed when joystick is fully pushed
     linear_scale: 0.1
     
-    # 角速度缩放因子 (rad/s)
-    # 摇杆完全推到底时的最大角速度
+    # Angular velocity scale factor (rad/s)
+    # Maximum angular speed when joystick is fully pushed
     angular_scale: 0.5
     
-    # 坐标系
+    # Coordinate frames
     base_frame: "base_link"
     
-    # 摇杆死区 (0-1)
+    # Joystick deadzone (0-1)
     deadzone: 0.1
-
 
 
 

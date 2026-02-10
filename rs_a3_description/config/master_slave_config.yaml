@@ -1,26 +1,26 @@
-# RS-A3 主从遥操作配置文件
-# 支持一对一、一对多、多对多映射模式
-# 支持6轴机械臂 + 夹爪（L7）共7关节控制
+# RS-A3 master-slave teleoperation configuration file
+# Supports one-to-one, one-to-many, and many-to-many mapping modes
+# Supports 6-axis robot arm + gripper (L7) for 7-joint control
 
-# 全局设置
-rate: 50.0                    # 控制频率 Hz
+# Global settings
+rate: 50.0                    # Control rate Hz
 
-# 主从映射配置
-# 支持多组映射，每组可以是一对一或一对多
+# Master-slave mapping configuration
+# Supports multiple mapping groups, each can be one-to-one or one-to-many
 mappings:
-  # 映射1：arm1 (can0) 主臂 -> arm4 (can3) 从臂
-  - master: "arm1"            # 主臂命名空间 (can0)
-    slaves: ["arm4"]          # 从臂命名空间列表 (can3)
-    scale: 1.0                # 位置缩放比例
-    mirror: false             # 是否镜像（左右手对称）
-    joint_offset: [0, 0, 0, 0, 0, 0, 0]  # 各关节偏移量（rad），7个关节
-    include_gripper: true     # 是否包含夹爪（L7）跟随
-    joint_count: 7            # 关节数量（6 或 7）
-    enabled: true             # 是否启用此映射
+  # Mapping 1: arm1 (can0) master -> arm4 (can3) slave
+  - master: "arm1"            # Master arm namespace (can0)
+    slaves: ["arm4"]          # Slave arm namespace list (can3)
+    scale: 1.0                # Position scale ratio
+    mirror: false             # Whether to mirror (left-right symmetry)
+    joint_offset: [0, 0, 0, 0, 0, 0, 0]  # Joint offsets (rad), 7 joints
+    include_gripper: true     # Whether to include gripper (L7) following
+    joint_count: 7            # Number of joints (6 or 7)
+    enabled: true             # Whether this mapping is enabled
 
-  # 映射2：arm2 (can1) 主臂 -> arm3 (can2) 从臂
-  - master: "arm2"            # 主臂命名空间 (can1)
-    slaves: ["arm3"]          # 从臂命名空间列表 (can2)
+  # Mapping 2: arm2 (can1) master -> arm3 (can2) slave
+  - master: "arm2"            # Master arm namespace (can1)
+    slaves: ["arm3"]          # Slave arm namespace list (can2)
     scale: 1.0
     mirror: false
     joint_offset: [0, 0, 0, 0, 0, 0, 0]
@@ -28,21 +28,21 @@ mappings:
     joint_count: 7
     enabled: true
 
-# 安全设置
+# Safety settings
 safety:
-  max_velocity: 15.0          # 最大速度限制 rad/s（提高以允许快速跟随）
-  position_tolerance: 0.5     # 位置跟随容差 rad（超过则停止跟随）
-  velocity_tolerance: 1.0     # 速度容差 rad/s
-  enable_collision_check: false  # 是否启用碰撞检测（需要 MoveIt）
+  max_velocity: 15.0          # Max velocity limit rad/s (increased to allow fast following)
+  position_tolerance: 0.5     # Position following tolerance rad (stops following if exceeded)
+  velocity_tolerance: 1.0     # Velocity tolerance rad/s
+  enable_collision_check: false  # Whether to enable collision detection (requires MoveIt)
 
-# 主臂设置
+# Master arm settings
 master:
-  use_zero_torque_mode: true  # 主臂是否使用零力矩模式（拖动示教）
-  pure_zero_torque: false     # false = 使用带重力补偿的零力矩模式（用于拖动示教）
-                              # true = 使用纯零力矩模式（Kp=0, Kd=0, torque=0）
-  enable_gravity_comp: true   # 是否启用重力补偿
+  use_zero_torque_mode: true  # Whether master arm uses zero-torque mode (teach by dragging)
+  pure_zero_torque: false     # false = use zero-torque mode with gravity compensation (for teach by dragging)
+                              # true = use pure zero-torque mode (Kp=0, Kd=0, torque=0)
+  enable_gravity_comp: true   # Whether to enable gravity compensation
 
-# 从臂设置  
+# Slave arm settings
 slave:
-  trajectory_duration: 0.02   # 轨迹执行时间（秒）- 减小以提高响应速度
-  use_streaming: true         # 使用流式控制而非 Action 目标点
+  trajectory_duration: 0.02   # Trajectory execution time (seconds) - reduced for faster response
+  use_streaming: true         # Use streaming control instead of Action goals

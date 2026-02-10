@@ -1,8 +1,8 @@
 #!/bin/bash
-# 安装 RS-A3 机械臂控制系统所需的依赖包
-# 运行方法: sudo ./install_deps.sh
+# 安装 RS-A3 机械臂控制系统所需依赖
+# 用法：sudo ./install_deps.sh
 
-echo "Installing ROS2 Control and MoveIt dependencies for RS-A3..."
+echo "正在安装 RS-A3 所需的 ROS2 Control 与 MoveIt 依赖..."
 
 # ROS2 Control
 apt install -y \
@@ -34,13 +34,12 @@ apt install -y \
 # CAN tools
 apt install -y can-utils
 
-echo "Dependencies installed successfully!"
+echo "依赖安装完成！"
 echo ""
-echo "Next steps:"
+echo "后续步骤："
 echo "1. cd /home/wy/RS/A3/ros2_ws"
 echo "2. source /opt/ros/humble/setup.bash"
 echo "3. colcon build --symlink-install"
 echo "4. source install/setup.bash"
 echo "5. ros2 launch rs_a3_moveit_config demo.launch.py"
-
 

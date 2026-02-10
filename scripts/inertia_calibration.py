@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-RS-A3 机械臂惯性参数标定程序
+RS-A3 arm inertia parameter calibration
 
-使用 Pinocchio 动力学库，通过在多个关节配置下测量力矩数据，
-拟合各连杆的惯性参数（质量、质心位置），实现精确的重力补偿。
+Use the Pinocchio dynamics library to measure torques across multiple joint
+configurations and fit link inertia parameters (mass, COM) for accurate gravity
+compensation.
 
-标定流程：
-1. 生成多关节组合测试点
-2. 依次移动到每个配置，采集稳态力矩
-3. 使用 scipy.optimize 拟合惯性参数
-4. 验证拟合质量并保存配置
+Calibration flow:
+1. Generate multi-joint test configurations
+2. Move to each configuration and collect steady-state torques
+3. Fit inertia parameters using scipy.optimize
+4. Validate fit quality and save configuration
 
-使用方法：
+Usage:
     python3 inertia_calibration.py [--quick] [--output PATH]
 """
 
@@ -37,13 +38,13 @@ try:
     PINOCCHIO_AVAILABLE = True
 except ImportError:
     PINOCCHIO_AVAILABLE = False
-    print("错误: 需要安装 Pinocchio 库")
+    print("Error: Pinocchio library is required")
     print("  sudo apt install ros-humble-pinocchio")
 
 
 @dataclass
 class CalibrationConfig:
-    """标定配置"""
+    """Calibration config"""
     urdf_path: str = "/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf"
     output_path: str = "/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml"
     
@@ -51,10 +52,10 @@ class CalibrationConfig:
         'L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint'
     ])
     
-    # 基准位置（避开零点）
+    # Reference position (avoid zero)
     home_position: List[float] = field(default_factory=lambda: [0.0, 0.785, -0.785, 0.5, 0.5, 0.0])
     
-    # 采样参数
+    # Sampling parameters
     samples_per_config: int = 40
     settle_time: float = 1.5
     sample_interval: float = 0.02
@@ -62,7 +63,7 @@ class CalibrationConfig:
 
 
 class InertiaCalibrator(Node):
-    """惯性参数标定器"""
+    """Inertia parameter calibrator"""
     
     def __init__(self, config: CalibrationConfig):
         super().__init__('inertia_calibrator')
@@ -70,42 +71,42 @@ class InertiaCalibrator(Node):
         self.config = config
         self.joint_names = config.joint_names
         
-        # 当前状态
+        # Current state
         self.current_positions = [0.0] * 6
         self.current_efforts = [0.0] * 6
         self.state_received = False
         
-        # Pinocchio 模型
+        # Pinocchio model
         self.model = None
         self.data = None
         
-        # 标定数据
+        # Calibration data
         self.calibration_data: List[Tuple[np.ndarray, np.ndarray]] = []
         
-        # ROS2 接口
+        # ROS2 interfaces
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 10)
         
         self._action_client = ActionClient(
             self, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
         
-        # 初始化 Pinocchio
+        # Initialize Pinocchio
         if PINOCCHIO_AVAILABLE:
             self.init_pinocchio()
     
     def init_pinocchio(self):
-        """初始化 Pinocchio 模型"""
+        """Initialize Pinocchio model"""
         try:
             self.model = pin.buildModelFromUrdf(self.config.urdf_path)
             self.data = pin.Data(self.model)
-            self.get_logger().info(f'Pinocchio 模型加载成功: {self.model.njoints} 个关节')
+            self.get_logger().info(f'Pinocchio model loaded: {self.model.njoints} joints')
             return True
         except Exception as e:
-            self.get_logger().error(f'Pinocchio 加载失败: {e}')
+            self.get_logger().error(f'Failed to load Pinocchio: {e}')
             return False
     
     def joint_state_callback(self, msg: JointState):
-        """关节状态回调"""
+        """Joint state callback"""
         for i, name in enumerate(self.joint_names):
             if name in msg.name:
                 idx = msg.name.index(name)
@@ -115,7 +116,7 @@ class InertiaCalibrator(Node):
         self.state_received = True
     
     def move_to_position(self, target: List[float], duration: float = None) -> bool:
-        """移动到目标位置"""
+        """Move to target position"""
         if duration is None:
             duration = self.config.motion_duration
         
@@ -144,7 +145,7 @@ class InertiaCalibrator(Node):
         return True
     
     def collect_samples(self) -> Tuple[np.ndarray, np.ndarray]:
-        """在当前位置收集样本"""
+        """Collect samples at current position"""
         positions = []
         efforts = []
         
@@ -157,91 +158,90 @@ class InertiaCalibrator(Node):
         return np.mean(positions, axis=0), np.mean(efforts, axis=0)
     
     def check_collision_with_base(self, config: List[float]) -> bool:
-        """检查配置是否可能与底面发生碰撞
+        """Check if configuration may collide with base.
         
-        当L2角度较大（末端向下）且L3角度接近0（小臂水平）时，
-        末端可能会与底面碰撞。
+        When L2 is large (end effector down) and L3 is near 0 (forearm level),
+        the end effector may collide with the base.
         
         Returns:
-            True 如果可能发生碰撞，应该跳过
+            True if collision is likely and should be skipped
         """
-        l2 = config[1]  # L2关节角度
-        l3 = config[2]  # L3关节角度
+        l2 = config[1]  # L2 joint angle
+        l3 = config[2]  # L3 joint angle
         
-        # 经验规则（基于实际碰撞测试数据）：
-        # 点39: L2=1.37, L3=-0.41 碰撞
-        # 点49: L2=1.20, L3=-0.35 碰撞
-        # 点53: L2=1.43, L3=-0.55 碰撞
+        # Heuristic rules (based on empirical collision tests):
+        # Point 39: L2=1.37, L3=-0.41 collided
+        # Point 49: L2=1.20, L3=-0.35 collided
+        # Point 53: L2=1.43, L3=-0.55 collided
         
-        # 规则1: L2 >= 1.2 且 L3 > -0.4 时碰撞
+        # Rule 1: L2 >= 1.2 and L3 > -0.4 -> collision
         if l2 >= 1.2 and l3 > -0.4:
             return True
         
-        # 规则2: L2 > 1.35 且 L3 > -0.6 时碰撞
+        # Rule 2: L2 > 1.35 and L3 > -0.6 -> collision
         if l2 > 1.35 and l3 > -0.6:
             return True
         
-        # 规则3: L2 >= 1.2 且 L3 >= -0.55 的组合区域
+        # Rule 3: region with L2 >= 1.2 and L3 >= -0.55
         if l2 >= 1.2 and l3 >= -0.55 and (l2 + l3 * 0.5) > 0.9:
             return True
         
         return False
     
     def generate_test_configurations(self, mode: str = 'full') -> List[List[float]]:
-        """生成测试配置点
+        """Generate test configurations.
         
         Args:
-            mode: 'quick' - 快速模式(~20点), 'full' - 完整模式(~46点), 
-                  'high' - 高精度(~80点), 'ultra' - 超高精度(~120点)
+            mode: 'quick' (~20), 'full' (~46), 'high' (~80), 'ultra' (~120)
         """
         configs = []
         home = np.array(self.config.home_position)
         
         if mode == 'quick':
-            # 快速模式：约20个测试点
+            # Quick mode: ~20 test points
             l2_range = np.linspace(0.4, 1.4, 6)
             l3_range = np.linspace(-1.2, -0.4, 5)
             l4_range = np.array([0.3, 0.7, 1.0])
             l5_range = np.array([0.3, 0.6])
             grid_step = 2
         elif mode == 'high':
-            # 高精度模式：约80个测试点
+            # High precision mode: ~80 test points
             l2_range = np.linspace(0.25, 1.55, 12)
             l3_range = np.linspace(-1.35, -0.25, 12)
             l4_range = np.linspace(0.25, 1.25, 7)
             l5_range = np.linspace(0.25, 1.05, 5)
             grid_step = 2
         elif mode == 'ultra':
-            # 超高精度模式：约120个测试点
+            # Ultra precision mode: ~120 test points
             l2_range = np.linspace(0.2, 1.6, 15)
             l3_range = np.linspace(-1.4, -0.2, 15)
             l4_range = np.linspace(0.2, 1.3, 8)
             l5_range = np.linspace(0.2, 1.1, 6)
             grid_step = 2
         else:
-            # 完整模式：约46个测试点
+            # Full mode: ~46 test points
             l2_range = np.linspace(0.3, 1.5, 10)
             l3_range = np.linspace(-1.3, -0.3, 10)
             l4_range = np.linspace(0.3, 1.2, 6)
             l5_range = np.linspace(0.3, 1.0, 5)
             grid_step = 2
         
-        # 第一阶段：L2 单独变化
-        self.get_logger().info('生成 L2 测试点...')
+        # Stage 1: vary L2 only
+        self.get_logger().info('Generating L2 test points...')
         for l2 in l2_range:
             cfg = home.copy()
             cfg[1] = l2
             configs.append(cfg.tolist())
         
-        # 第二阶段：L3 单独变化
-        self.get_logger().info('生成 L3 测试点...')
+        # Stage 2: vary L3 only
+        self.get_logger().info('Generating L3 test points...')
         for l3 in l3_range:
             cfg = home.copy()
             cfg[2] = l3
             configs.append(cfg.tolist())
         
-        # 第三阶段：L2+L3 网格组合
-        self.get_logger().info('生成 L2+L3 组合测试点...')
+        # Stage 3: L2+L3 grid combinations
+        self.get_logger().info('Generating L2+L3 grid combinations...')
         l2_grid = l2_range[::grid_step]
         l3_grid = l3_range[::grid_step]
         for l2 in l2_grid:
@@ -251,8 +251,8 @@ class InertiaCalibrator(Node):
                 cfg[2] = l3
                 configs.append(cfg.tolist())
         
-        # 第四阶段：L4+L5 组合变化
-        self.get_logger().info('生成 L4+L5 组合测试点...')
+        # Stage 4: L4+L5 combinations
+        self.get_logger().info('Generating L4+L5 combination points...')
         for l4 in l4_range:
             for l5 in l5_range:
                 cfg = home.copy()
@@ -260,7 +260,7 @@ class InertiaCalibrator(Node):
                 cfg[4] = l5
                 configs.append(cfg.tolist())
         
-        # 去重
+        # De-duplicate
         unique_configs = []
         for cfg in configs:
             is_dup = False
@@ -271,60 +271,60 @@ class InertiaCalibrator(Node):
             if not is_dup:
                 unique_configs.append(cfg)
         
-        # 过滤掉可能与底面碰撞的配置
+        # Filter configs that may collide with base
         safe_configs = []
         skipped = 0
         for cfg in unique_configs:
             if self.check_collision_with_base(cfg):
                 skipped += 1
-                self.get_logger().info(f'  跳过碰撞配置: L2={cfg[1]:.2f}, L3={cfg[2]:.2f}')
+                self.get_logger().info(f'  Skipping collision config: L2={cfg[1]:.2f}, L3={cfg[2]:.2f}')
             else:
                 safe_configs.append(cfg)
         
         if skipped > 0:
-            self.get_logger().info(f'已过滤 {skipped} 个可能碰撞的配置')
+            self.get_logger().info(f'Filtered {skipped} potentially colliding configs')
         
-        self.get_logger().info(f'总计 {len(safe_configs)} 个安全测试点')
+        self.get_logger().info(f'Total safe test points: {len(safe_configs)}')
         return safe_configs
     
     def generate_wrist_configurations(self) -> List[List[float]]:
-        """生成腕部关节 (L4/L5/L6) 测试配置点
+        """Generate wrist joint (L4/L5/L6) test configurations.
         
-        L2/L3 固定在 home 位置，只变化 L4/L5/L6
+        L2/L3 fixed at home position; only vary L4/L5/L6.
         """
         configs = []
         home = np.array(self.config.home_position)
         
-        # L4/L5/L6 测试范围（更精细）
-        l4_range = np.linspace(0.0, 1.5, 12)    # 12点
-        l5_range = np.linspace(0.0, 1.2, 10)    # 10点
-        l6_range = np.linspace(-0.8, 0.8, 8)    # 8点
+        # L4/L5/L6 test ranges (finer)
+        l4_range = np.linspace(0.0, 1.5, 12)    # 12 points
+        l5_range = np.linspace(0.0, 1.2, 10)    # 10 points
+        l6_range = np.linspace(-0.8, 0.8, 8)    # 8 points
         
-        # 第一阶段：L4 单独变化
-        self.get_logger().info('生成 L4 测试点...')
+        # Stage 1: vary L4 only
+        self.get_logger().info('Generating L4 test points...')
         for l4 in l4_range:
             cfg = home.copy()
             cfg[3] = l4
             configs.append(cfg.tolist())
         
-        # 第二阶段：L5 单独变化
-        self.get_logger().info('生成 L5 测试点...')
+        # Stage 2: vary L5 only
+        self.get_logger().info('Generating L5 test points...')
         for l5 in l5_range:
             cfg = home.copy()
             cfg[4] = l5
             configs.append(cfg.tolist())
         
-        # 第三阶段：L6 单独变化
-        self.get_logger().info('生成 L6 测试点...')
+        # Stage 3: vary L6 only
+        self.get_logger().info('Generating L6 test points...')
         for l6 in l6_range:
             cfg = home.copy()
             cfg[5] = l6
             configs.append(cfg.tolist())
         
-        # 第四阶段：L4+L5 网格组合
-        self.get_logger().info('生成 L4+L5 组合测试点...')
-        l4_grid = l4_range[::2]  # 6点
-        l5_grid = l5_range[::2]  # 5点
+        # Stage 4: L4+L5 grid combinations
+        self.get_logger().info('Generating L4+L5 combination points...')
+        l4_grid = l4_range[::2]  # 6 points
+        l5_grid = l5_range[::2]  # 5 points
         for l4 in l4_grid:
             for l5 in l5_grid:
                 cfg = home.copy()
@@ -332,8 +332,8 @@ class InertiaCalibrator(Node):
                 cfg[4] = l5
                 configs.append(cfg.tolist())
         
-        # 第五阶段：L4+L5+L6 组合（选取代表性点）
-        self.get_logger().info('生成 L4+L5+L6 组合测试点...')
+        # Stage 5: L4+L5+L6 combos (representative points)
+        self.get_logger().info('Generating L4+L5+L6 combination points...')
         l4_combo = [0.3, 0.8, 1.2]
         l5_combo = [0.3, 0.7]
         l6_combo = [-0.5, 0.0, 0.5]
@@ -346,7 +346,7 @@ class InertiaCalibrator(Node):
                     cfg[5] = l6
                     configs.append(cfg.tolist())
         
-        # 去重
+        # De-duplicate
         unique_configs = []
         for cfg in configs:
             is_dup = False
@@ -357,19 +357,19 @@ class InertiaCalibrator(Node):
             if not is_dup:
                 unique_configs.append(cfg)
         
-        self.get_logger().info(f'总计 {len(unique_configs)} 个腕部测试点')
+        self.get_logger().info(f'Total wrist test points: {len(unique_configs)}')
         return unique_configs
     
     def compute_gravity_with_params(self, q: np.ndarray, params: np.ndarray) -> np.ndarray:
-        """使用给定的惯性参数计算重力力矩"""
+        """Compute gravity torque with given inertia parameters"""
         if self.model is None:
             return np.zeros(6)
         
-        # 临时修改模型的惯性参数
-        # params 格式: [L2_mass, L2_com_x, L3_mass, L3_com_x, L3_com_y, 
-        #               L4_mass, L4_com_x, L4_com_y, L5_mass, L5_com_z, L6_mass, L6_com_z]
+        # Temporarily modify model inertias
+        # params format: [L2_mass, L2_com_x, L3_mass, L3_com_x, L3_com_y,
+        #                L4_mass, L4_com_x, L4_com_y, L5_mass, L5_com_z, L6_mass, L6_com_z]
         
-        # 保存原始值
+        # Save originals
         original_inertias = []
         for i in range(1, min(7, self.model.nbodies)):
             original_inertias.append({
@@ -377,7 +377,7 @@ class InertiaCalibrator(Node):
                 'lever': self.model.inertias[i].lever.copy()
             })
         
-        # 应用新参数
+        # Apply new parameters
         try:
             # L2 (index 2 in model)
             if len(params) > 0:
@@ -413,17 +413,17 @@ class InertiaCalibrator(Node):
             if len(params) > 11:
                 self.model.inertias[6].lever[2] = params[11]
             
-            # 重新创建 data
+            # Recreate data
             self.data = pin.Data(self.model)
             
-            # 计算重力力矩
+            # Compute gravity torque
             q_pin = np.array(q[:self.model.nq])
             v = np.zeros(self.model.nv)
             a = np.zeros(self.model.nv)
             tau = pin.rnea(self.model, self.data, q_pin, v, a)
             
         finally:
-            # 恢复原始值
+            # Restore originals
             for i, orig in enumerate(original_inertias):
                 self.model.inertias[i + 1].mass = orig['mass']
                 self.model.inertias[i + 1].lever = orig['lever']
@@ -432,13 +432,13 @@ class InertiaCalibrator(Node):
         return tau[:6]
     
     def objective_function(self, params: np.ndarray) -> float:
-        """优化目标函数：测量力矩与预测力矩的均方误差"""
+        """Objective: MSE between measured and predicted torques"""
         total_error = 0.0
         
         for positions, measured_efforts in self.calibration_data:
             predicted = self.compute_gravity_with_params(positions, params)
             
-            # 只计算 L2-L6 的误差（L1 绕 Z 轴，不受重力影响）
+            # Only compute error for L2-L6 (L1 rotates around Z, no gravity effect)
             for i in range(1, 6):
                 error = measured_efforts[i] - predicted[i]
                 total_error += error ** 2
@@ -446,20 +446,20 @@ class InertiaCalibrator(Node):
         return total_error
     
     def wrist_objective_function(self, wrist_params: np.ndarray, fixed_l2l3_params: np.ndarray) -> float:
-        """腕部标定目标函数：只优化 L4/L5/L6 参数
+        """Wrist calibration objective: only optimize L4/L5/L6.
         
         Args:
-            wrist_params: [L4_mass, L4_com_x, L4_com_y, L5_mass, L5_com_z, L6_mass, L6_com_z] (7个参数)
-            fixed_l2l3_params: [L2_mass, L2_com_x, L3_mass, L3_com_x, L3_com_y] (5个参数)
+            wrist_params: [L4_mass, L4_com_x, L4_com_y, L5_mass, L5_com_z, L6_mass, L6_com_z] (7 params)
+            fixed_l2l3_params: [L2_mass, L2_com_x, L3_mass, L3_com_x, L3_com_y] (5 params)
         """
-        # 组合完整参数
+        # Combine full params
         full_params = np.concatenate([fixed_l2l3_params, wrist_params])
         
         total_error = 0.0
         for positions, measured_efforts in self.calibration_data:
             predicted = self.compute_gravity_with_params(positions, full_params)
             
-            # 只计算 L4-L6 的误差（索引 3, 4, 5）
+            # Only compute error for L4-L6 (indices 3, 4, 5)
             for i in range(3, 6):
                 error = measured_efforts[i] - predicted[i]
                 total_error += error ** 2
@@ -467,42 +467,42 @@ class InertiaCalibrator(Node):
         return total_error
     
     def run_calibration(self, mode: str = 'full') -> Dict:
-        """运行完整的标定流程
+        """Run full calibration flow.
         
         Args:
             mode: 'quick', 'full', 'high', 'ultra'
         """
-        mode_names = {'quick': '快速', 'full': '完整', 'high': '高精度', 'ultra': '超高精度'}
+        mode_names = {'quick': 'quick', 'full': 'full', 'high': 'high', 'ultra': 'ultra'}
         self.get_logger().info('=' * 60)
-        self.get_logger().info(f'  RS-A3 惯性参数标定程序 ({mode_names.get(mode, mode)}模式)')
+        self.get_logger().info(f'  RS-A3 inertia calibration ({mode_names.get(mode, mode)} mode)')
         self.get_logger().info('=' * 60)
         
         if self.model is None:
-            self.get_logger().error('Pinocchio 模型未初始化')
+            self.get_logger().error('Pinocchio model not initialized')
             return {}
         
-        # 等待关节状态
-        self.get_logger().info('等待关节状态...')
+        # Wait for joint states
+        self.get_logger().info('Waiting for joint states...')
         start = time.time()
         while not self.state_received and (time.time() - start) < 10:
             rclpy.spin_once(self, timeout_sec=0.1)
         
         if not self.state_received:
-            self.get_logger().error('无法获取关节状态')
+            self.get_logger().error('Failed to get joint states')
             return {}
         
-        # 生成测试配置
+        # Generate test configurations
         test_configs = self.generate_test_configurations(mode)
         
-        # 收集数据
-        self.get_logger().info(f'\n开始数据采集 ({len(test_configs)} 个测试点)...')
+        # Collect data
+        self.get_logger().info(f'\nStarting data collection ({len(test_configs)} test points)...')
         self.calibration_data.clear()
         
         for idx, config in enumerate(test_configs):
-            self.get_logger().info(f'\n[{idx+1}/{len(test_configs)}] 目标: L2={config[1]:.2f}, L3={config[2]:.2f}, L4={config[3]:.2f}, L5={config[4]:.2f}')
+            self.get_logger().info(f'\n[{idx+1}/{len(test_configs)}] Target: L2={config[1]:.2f}, L3={config[2]:.2f}, L4={config[3]:.2f}, L5={config[4]:.2f}')
             
             if not self.move_to_position(config):
-                self.get_logger().warn('  移动失败，跳过')
+                self.get_logger().warn('  Move failed, skipping')
                 continue
             
             time.sleep(self.config.settle_time)
@@ -510,23 +510,23 @@ class InertiaCalibrator(Node):
             positions, efforts = self.collect_samples()
             self.calibration_data.append((positions, efforts))
             
-            self.get_logger().info(f'  实际: L2={positions[1]:.3f}, L3={positions[2]:.3f}')
-            self.get_logger().info(f'  力矩: L2={efforts[1]:.4f}, L3={efforts[2]:.4f}, L4={efforts[3]:.4f}')
+            self.get_logger().info(f'  Actual: L2={positions[1]:.3f}, L3={positions[2]:.3f}')
+            self.get_logger().info(f'  Torque: L2={efforts[1]:.4f}, L3={efforts[2]:.4f}, L4={efforts[3]:.4f}')
         
-        # 回到 home
-        self.get_logger().info('\n回到 Home 位置...')
+        # Return to home
+        self.get_logger().info('\nReturning to Home position...')
         self.move_to_position(self.config.home_position)
         
         if len(self.calibration_data) < 10:
-            self.get_logger().error('数据点太少，无法标定')
+            self.get_logger().error('Too few data points, cannot calibrate')
             return {}
         
-        # 优化拟合
+        # Optimize fit
         self.get_logger().info('\n' + '=' * 60)
-        self.get_logger().info('  优化拟合惯性参数')
+        self.get_logger().info('  Optimizing inertia parameters')
         self.get_logger().info('=' * 60)
         
-        # 初始值（从 URDF 默认值）
+        # Initial values (from URDF defaults)
         initial_params = np.array([
             0.8348, 0.095,      # L2: mass, com_x
             0.1976, -0.056, 0.049,  # L3: mass, com_x, com_y
@@ -535,7 +535,7 @@ class InertiaCalibrator(Node):
             0.5313, 0.070       # L6: mass, com_z
         ])
         
-        # 参数边界
+        # Parameter bounds
         bounds = [
             (0.1, 2.0), (-0.2, 0.2),     # L2
             (0.05, 0.5), (-0.15, 0.0), (0.0, 0.1),  # L3
@@ -544,7 +544,7 @@ class InertiaCalibrator(Node):
             (0.1, 1.0), (0.0, 0.15)      # L6
         ]
         
-        self.get_logger().info('初始参数:')
+        self.get_logger().info('Initial parameters:')
         self.get_logger().info(f'  L2: mass={initial_params[0]:.4f}, com_x={initial_params[1]:.4f}')
         self.get_logger().info(f'  L3: mass={initial_params[2]:.4f}, com_x={initial_params[3]:.4f}, com_y={initial_params[4]:.4f}')
         self.get_logger().info(f'  L4: mass={initial_params[5]:.4f}, com_x={initial_params[6]:.4f}, com_y={initial_params[7]:.4f}')
@@ -552,10 +552,10 @@ class InertiaCalibrator(Node):
         self.get_logger().info(f'  L6: mass={initial_params[10]:.4f}, com_z={initial_params[11]:.4f}')
         
         initial_error = self.objective_function(initial_params)
-        self.get_logger().info(f'\n初始误差: {initial_error:.6f}')
+        self.get_logger().info(f'\nInitial error: {initial_error:.6f}')
         
-        # 优化
-        self.get_logger().info('开始优化...')
+        # Optimize
+        self.get_logger().info('Starting optimization...')
         result = minimize(
             self.objective_function,
             initial_params,
@@ -567,13 +567,13 @@ class InertiaCalibrator(Node):
         optimized_params = result.x
         final_error = result.fun
         
-        self.get_logger().info(f'优化完成! 最终误差: {final_error:.6f} (降低 {(1 - final_error/initial_error)*100:.1f}%)')
+        self.get_logger().info(f'Optimization done! Final error: {final_error:.6f} (reduced {(1 - final_error/initial_error)*100:.1f}%)')
         
-        # 计算 RMSE 和 R²
+        # Compute RMSE and R²
         n_samples = len(self.calibration_data) * 5  # L2-L6
         rmse = np.sqrt(final_error / n_samples)
         
-        # 计算 SS_tot
+        # Compute SS_tot
         all_measured = []
         for _, efforts in self.calibration_data:
             all_measured.extend(efforts[1:6])
@@ -584,7 +584,7 @@ class InertiaCalibrator(Node):
         self.get_logger().info(f'RMSE: {rmse:.4f} Nm')
         self.get_logger().info(f'R²: {r_squared:.4f}')
         
-        # 整理结果
+        # Assemble results
         results = {
             'L2': {'mass': float(optimized_params[0]), 'com': [float(optimized_params[1]), 0.0, 0.0]},
             'L3': {'mass': float(optimized_params[2]), 'com': [float(optimized_params[3]), float(optimized_params[4]), 0.003]},
@@ -599,7 +599,7 @@ class InertiaCalibrator(Node):
             }
         }
         
-        self.get_logger().info('\n优化后参数:')
+        self.get_logger().info('\nOptimized parameters:')
         for joint in ['L2', 'L3', 'L4', 'L5', 'L6']:
             p = results[joint]
             self.get_logger().info(f'  {joint}: mass={p["mass"]:.4f}, com={p["com"]}')
@@ -607,54 +607,54 @@ class InertiaCalibrator(Node):
         return results
     
     def run_wrist_calibration(self) -> Dict:
-        """运行腕部关节 (L4/L5/L6) 专项标定
+        """Run wrist (L4/L5/L6) calibration.
         
-        保留已标定的 L2/L3 参数，只优化 L4/L5/L6 参数
+        Keep calibrated L2/L3 and only optimize L4/L5/L6.
         """
         self.get_logger().info('=' * 60)
-        self.get_logger().info('  RS-A3 腕部关节精细标定 (L4/L5/L6)')
+        self.get_logger().info('  RS-A3 wrist calibration (L4/L5/L6)')
         self.get_logger().info('=' * 60)
         
         if self.model is None:
-            self.get_logger().error('Pinocchio 模型未初始化')
+            self.get_logger().error('Pinocchio model not initialized')
             return {}
         
-        # 从现有配置文件读取 L2/L3 参数
+        # Load L2/L3 parameters from existing config
         existing_params = self.load_existing_params()
         if existing_params is None:
-            self.get_logger().warn('无法读取现有参数，使用 URDF 默认值')
+            self.get_logger().warn('Failed to read existing params, using URDF defaults')
             fixed_l2l3_params = np.array([0.8348, 0.095, 0.1976, -0.056, 0.049])
         else:
             fixed_l2l3_params = np.array([
                 existing_params['L2']['mass'], existing_params['L2']['com'][0],
                 existing_params['L3']['mass'], existing_params['L3']['com'][0], existing_params['L3']['com'][1]
             ])
-            self.get_logger().info(f'使用已标定的 L2/L3 参数:')
+            self.get_logger().info('Using calibrated L2/L3 parameters:')
             self.get_logger().info(f'  L2: mass={fixed_l2l3_params[0]:.4f}, com_x={fixed_l2l3_params[1]:.4f}')
             self.get_logger().info(f'  L3: mass={fixed_l2l3_params[2]:.4f}, com_x={fixed_l2l3_params[3]:.4f}, com_y={fixed_l2l3_params[4]:.4f}')
         
-        # 等待关节状态
-        self.get_logger().info('等待关节状态...')
+        # Wait for joint states
+        self.get_logger().info('Waiting for joint states...')
         start = time.time()
         while not self.state_received and (time.time() - start) < 10:
             rclpy.spin_once(self, timeout_sec=0.1)
         
         if not self.state_received:
-            self.get_logger().error('无法获取关节状态')
+            self.get_logger().error('Failed to get joint states')
             return {}
         
-        # 生成腕部测试配置
+        # Generate wrist test configurations
         test_configs = self.generate_wrist_configurations()
         
-        # 收集数据
-        self.get_logger().info(f'\n开始腕部数据采集 ({len(test_configs)} 个测试点)...')
+        # Collect data
+        self.get_logger().info(f'\nStarting wrist data collection ({len(test_configs)} test points)...')
         self.calibration_data.clear()
         
         for idx, config in enumerate(test_configs):
-            self.get_logger().info(f'\n[{idx+1}/{len(test_configs)}] 目标: L4={config[3]:.2f}, L5={config[4]:.2f}, L6={config[5]:.2f}')
+            self.get_logger().info(f'\n[{idx+1}/{len(test_configs)}] Target: L4={config[3]:.2f}, L5={config[4]:.2f}, L6={config[5]:.2f}')
             
             if not self.move_to_position(config):
-                self.get_logger().warn('  移动失败，跳过')
+                self.get_logger().warn('  Move failed, skipping')
                 continue
             
             time.sleep(self.config.settle_time)
@@ -662,46 +662,46 @@ class InertiaCalibrator(Node):
             positions, efforts = self.collect_samples()
             self.calibration_data.append((positions, efforts))
             
-            self.get_logger().info(f'  实际: L4={positions[3]:.3f}, L5={positions[4]:.3f}, L6={positions[5]:.3f}')
-            self.get_logger().info(f'  力矩: L4={efforts[3]:.4f}, L5={efforts[4]:.4f}, L6={efforts[5]:.4f}')
+            self.get_logger().info(f'  Actual: L4={positions[3]:.3f}, L5={positions[4]:.3f}, L6={positions[5]:.3f}')
+            self.get_logger().info(f'  Torque: L4={efforts[3]:.4f}, L5={efforts[4]:.4f}, L6={efforts[5]:.4f}')
         
-        # 回到 home
-        self.get_logger().info('\n回到 Home 位置...')
+        # Return to home
+        self.get_logger().info('\nReturning to Home position...')
         self.move_to_position(self.config.home_position)
         
         if len(self.calibration_data) < 10:
-            self.get_logger().error('数据点太少，无法标定')
+            self.get_logger().error('Too few data points, cannot calibrate')
             return {}
         
-        # 优化拟合
+        # Optimize fit
         self.get_logger().info('\n' + '=' * 60)
-        self.get_logger().info('  优化拟合腕部惯性参数 (L4/L5/L6)')
+        self.get_logger().info('  Optimizing wrist inertia parameters (L4/L5/L6)')
         self.get_logger().info('=' * 60)
         
-        # 腕部参数初始值
+        # Wrist parameter initial values
         initial_wrist_params = np.array([
             0.4606, -0.024, 0.031,  # L4: mass, com_x, com_y
             0.0180, 0.018,          # L5: mass, com_z
             0.5313, 0.070           # L6: mass, com_z
         ])
         
-        # 参数边界
+        # Parameter bounds
         wrist_bounds = [
             (0.1, 1.5), (-0.15, 0.05), (0.0, 0.1),   # L4
             (0.005, 0.2), (0.0, 0.08),                # L5
             (0.1, 1.5), (0.0, 0.2)                    # L6
         ]
         
-        self.get_logger().info('初始腕部参数:')
+        self.get_logger().info('Initial wrist parameters:')
         self.get_logger().info(f'  L4: mass={initial_wrist_params[0]:.4f}, com_x={initial_wrist_params[1]:.4f}, com_y={initial_wrist_params[2]:.4f}')
         self.get_logger().info(f'  L5: mass={initial_wrist_params[3]:.4f}, com_z={initial_wrist_params[4]:.4f}')
         self.get_logger().info(f'  L6: mass={initial_wrist_params[5]:.4f}, com_z={initial_wrist_params[6]:.4f}')
         
         initial_error = self.wrist_objective_function(initial_wrist_params, fixed_l2l3_params)
-        self.get_logger().info(f'\n初始误差: {initial_error:.6f}')
+        self.get_logger().info(f'\nInitial error: {initial_error:.6f}')
         
-        # 优化
-        self.get_logger().info('开始优化...')
+        # Optimize
+        self.get_logger().info('Starting optimization...')
         result = minimize(
             lambda x: self.wrist_objective_function(x, fixed_l2l3_params),
             initial_wrist_params,
@@ -713,13 +713,13 @@ class InertiaCalibrator(Node):
         optimized_wrist = result.x
         final_error = result.fun
         
-        self.get_logger().info(f'优化完成! 最终误差: {final_error:.6f} (降低 {(1 - final_error/initial_error)*100:.1f}%)')
+        self.get_logger().info(f'Optimization done! Final error: {final_error:.6f} (reduced {(1 - final_error/initial_error)*100:.1f}%)')
         
-        # 计算 RMSE 和 R²
+        # Compute RMSE and R²
         n_samples = len(self.calibration_data) * 3  # L4-L6
         rmse = np.sqrt(final_error / n_samples)
         
-        # 计算 SS_tot
+        # Compute SS_tot
         all_measured = []
         for _, efforts in self.calibration_data:
             all_measured.extend(efforts[3:6])
@@ -730,7 +730,7 @@ class InertiaCalibrator(Node):
         self.get_logger().info(f'RMSE: {rmse:.4f} Nm')
         self.get_logger().info(f'R²: {r_squared:.4f}')
         
-        # 整理结果（保留 L2/L3，更新 L4/L5/L6）
+        # Assemble results (keep L2/L3, update L4/L5/L6)
         results = {
             'L2': {'mass': float(fixed_l2l3_params[0]), 'com': [float(fixed_l2l3_params[1]), 0.0, 0.0]},
             'L3': {'mass': float(fixed_l2l3_params[2]), 'com': [float(fixed_l2l3_params[3]), float(fixed_l2l3_params[4]), 0.003]},
@@ -745,7 +745,7 @@ class InertiaCalibrator(Node):
             }
         }
         
-        self.get_logger().info('\n优化后腕部参数:')
+        self.get_logger().info('\nOptimized wrist parameters:')
         for joint in ['L4', 'L5', 'L6']:
             p = results[joint]
             self.get_logger().info(f'  {joint}: mass={p["mass"]:.4f}, com={p["com"]}')
@@ -753,7 +753,7 @@ class InertiaCalibrator(Node):
         return results
     
     def load_existing_params(self) -> Dict:
-        """从配置文件加载现有的惯性参数"""
+        """Load existing inertia parameters from config file"""
         try:
             config_path = self.config.output_path
             with open(config_path, 'r') as f:
@@ -777,58 +777,58 @@ class InertiaCalibrator(Node):
                     com_str = com_str.strip('[]')
                     params[current_joint]['com'] = [float(x.strip()) for x in com_str.split(',')]
             
-            # 验证参数完整性
+            # Validate parameter completeness
             for j in ['L2', 'L3']:
                 if 'mass' not in params[j] or 'com' not in params[j]:
                     return None
             
             return params
         except Exception as e:
-            self.get_logger().warn(f'读取配置文件失败: {e}')
+            self.get_logger().warn(f'Failed to read config file: {e}')
             return None
     
     def save_results(self, results: Dict, output_path: str):
-        """保存标定结果到 YAML 文件"""
-        yaml_content = f"""# RS-A3 机械臂惯性参数配置文件
-# 用于 Pinocchio 重力补偿计算
-# 这些参数通过标定程序拟合得到，覆盖 URDF 默认值
+        """Save calibration results to YAML file"""
+        yaml_content = f"""# RS-A3 arm inertia parameters
+# For Pinocchio gravity compensation
+# These parameters are fitted by the calibration program and override URDF defaults
 #
-# 标定日期: {results['calibration_info']['date']}
-# 标定程序: scripts/inertia_calibration.py
+# Calibration date: {results['calibration_info']['date']}
+# Calibration script: scripts/inertia_calibration.py
 # RMSE: {results['calibration_info']['rmse']:.4f} Nm
 # R²: {results['calibration_info']['r_squared']:.4f}
 
-# 是否启用标定后的惯性参数
+# Whether to enable calibrated inertia parameters
 use_calibrated_params: true
 
-# 各连杆惯性参数
+# Inertia parameters for each link
 inertia_params:
-  # L2 - 大臂
+  # L2 - upper arm
   L2:
     mass: {results['L2']['mass']:.4f}
     com: {results['L2']['com']}
   
-  # L3 - 小臂
+  # L3 - forearm
   L3:
     mass: {results['L3']['mass']:.4f}
     com: {results['L3']['com']}
   
-  # L4 - 腕部 roll
+  # L4 - wrist roll
   L4:
     mass: {results['L4']['mass']:.4f}
     com: {results['L4']['com']}
   
-  # L5 - 腕部 pitch
+  # L5 - wrist pitch
   L5:
     mass: {results['L5']['mass']:.4f}
     com: {results['L5']['com']}
   
-  # L6 - 末端 yaw
+  # L6 - end-effector yaw
   L6:
     mass: {results['L6']['mass']:.4f}
     com: {results['L6']['com']}
 
-# 标定统计信息
+# Calibration statistics
 calibration_info:
   date: "{results['calibration_info']['date']}"
   num_samples: {results['calibration_info']['num_samples']}
@@ -839,26 +839,26 @@ calibration_info:
         with open(output_path, 'w') as f:
             f.write(yaml_content)
         
-        self.get_logger().info(f'\n结果已保存到: {output_path}')
+        self.get_logger().info(f'\nResults saved to: {output_path}')
 
 
 def main():
-    parser = argparse.ArgumentParser(description='RS-A3 惯性参数标定')
-    parser.add_argument('--quick', action='store_true', help='快速模式（~20个测试点）')
-    parser.add_argument('--high', action='store_true', help='高精度模式（~80个测试点）')
-    parser.add_argument('--ultra', action='store_true', help='超高精度模式（~120个测试点）')
-    parser.add_argument('--wrist', action='store_true', help='腕部标定模式（只标定L4/L5/L6）')
-    parser.add_argument('--samples', type=int, default=40, help='每个测试点采样次数（默认40）')
+    parser = argparse.ArgumentParser(description='RS-A3 inertia calibration')
+    parser.add_argument('--quick', action='store_true', help='Quick mode (~20 points)')
+    parser.add_argument('--high', action='store_true', help='High precision (~80 points)')
+    parser.add_argument('--ultra', action='store_true', help='Ultra precision (~120 points)')
+    parser.add_argument('--wrist', action='store_true', help='Wrist mode (only L4/L5/L6)')
+    parser.add_argument('--samples', type=int, default=40, help='Samples per point (default 40)')
     parser.add_argument('--output', type=str, 
                         default='/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml',
-                        help='输出配置文件路径')
+                        help='Output config file path')
     parser.add_argument('--urdf', type=str,
                         default='/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf',
-                        help='URDF 文件路径')
+                        help='URDF file path')
     
     args = parser.parse_args()
     
-    # 确定模式
+    # Determine mode
     if args.ultra:
         mode = 'ultra'
     elif args.high:
@@ -883,25 +883,25 @@ def main():
     
     try:
         if args.wrist:
-            # 腕部标定模式
+            # Wrist calibration mode
             results = calibrator.run_wrist_calibration()
-            mode_desc = "腕部 (L4/L5/L6)"
+            mode_desc = "Wrist (L4/L5/L6)"
         else:
-            # 完整标定模式
+            # Full calibration mode
             results = calibrator.run_calibration(mode=mode)
-            mode_desc = "完整"
+            mode_desc = "Full"
         
         if results:
             calibrator.save_results(results, args.output)
             print("\n" + "=" * 60)
-            print(f"  {mode_desc}标定完成!")
-            print("  请重启控制器以应用新参数")
+            print(f"  {mode_desc} calibration completed!")
+            print("  Please restart the controller to apply new parameters")
             print("=" * 60)
         else:
-            print("\n标定失败")
+            print("\nCalibration failed")
     
     except KeyboardInterrupt:
-        print("\n标定被中断")
+        print("\nCalibration interrupted")
     
     finally:
         calibrator.destroy_node()

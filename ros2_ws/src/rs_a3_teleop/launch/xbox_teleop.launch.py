@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Xbox手柄控制启动文件
-启动joy节点和xbox_teleop节点
+Xbox Controller Launch File
+Launches joy node and xbox_teleop node
 """
 
 from launch import LaunchDescription
@@ -12,7 +12,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 声明启动参数
+    # Declare launch arguments
     device_arg = DeclareLaunchArgument(
         'device',
         default_value='/dev/input/js0',
@@ -29,7 +29,7 @@ def generate_launch_description():
         description='Path to config file'
     )
     
-    # Joy节点 - 读取手柄输入
+    # Joy node - reads controller input
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -42,7 +42,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Xbox Teleop节点 - 处理手柄输入并控制机械臂
+    # Xbox Teleop node - processes controller input and controls robot arm
     xbox_teleop_node = Node(
         package='rs_a3_teleop',
         executable='xbox_teleop_node',

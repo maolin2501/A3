@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-仿真环境Xbox手柄控制启动文件
-使用Mock硬件进行仿真测试
+Simulation Xbox Controller Launch File
+Uses mock hardware for simulation testing
 """
 
 from launch import LaunchDescription
@@ -13,7 +13,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 声明启动参数
+    # Declare launch arguments
     device_arg = DeclareLaunchArgument(
         'device',
         default_value='/dev/input/js0',
@@ -26,13 +26,13 @@ def generate_launch_description():
         description='Start RViz2'
     )
     
-    # 包含MoveIt仿真启动文件（使用mock硬件）
+    # Include MoveIt simulation launch file (using mock hardware)
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare('rs_a3_moveit_config'),
                 'launch',
-                'demo.launch.py'  # 使用仿真demo launch文件
+                'demo.launch.py'  # Use simulation demo launch file
             ])
         ]),
         launch_arguments={
@@ -40,7 +40,7 @@ def generate_launch_description():
         }.items()
     )
     
-    # Joy节点
+    # Joy node
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -53,7 +53,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Xbox Teleop节点
+    # Xbox Teleop node
     xbox_teleop_node = Node(
         package='rs_a3_teleop',
         executable='xbox_teleop_node',

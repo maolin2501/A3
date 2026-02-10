@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-单独回零测试脚本
-反复测试回零误差，监控关节位置
+Standalone zeroing test script.
+Repeatedly tests zeroing error and monitors joint positions.
 """
 
 import rclpy
@@ -19,7 +19,7 @@ class ZeroTest(Node):
         self.current_positions = [0.0] * 6
         self.position_received = False
         
-        # 订阅关节状态
+        # Subscribe to joint states
         self.joint_state_sub = self.create_subscription(
             JointState,
             '/joint_states',
@@ -27,7 +27,7 @@ class ZeroTest(Node):
             10
         )
         
-        self.get_logger().info('零点测试脚本已启动，等待关节状态...')
+        self.get_logger().info('Zero test script started, waiting for joint states...')
     
     def joint_state_callback(self, msg):
         for i, name in enumerate(self.joint_names):
@@ -43,11 +43,11 @@ class ZeroTest(Node):
         return self.position_received
     
     def get_errors(self, target=None):
-        """计算当前位置与目标的误差"""
+        """Compute error between current and target positions"""
         if target is None:
             target = [0.0] * 6
         
-        # 更新位置
+        # Update positions
         for _ in range(5):
             rclpy.spin_once(self, timeout_sec=0.05)
         
@@ -57,7 +57,7 @@ class ZeroTest(Node):
         return errors
     
     def print_status(self, label=""):
-        """打印当前状态"""
+        """Print current status"""
         errors = self.get_errors()
         
         print(f"\n{'='*60}")
@@ -65,7 +65,7 @@ class ZeroTest(Node):
             print(f"  {label}")
             print(f"{'='*60}")
         
-        print(f"{'关节':<8} {'位置(rad)':<12} {'位置(°)':<10} {'误差(rad)':<12} {'误差(°)':<10}")
+        print(f"{'Joint':<8} {'Pos(rad)':<12} {'Pos(°)':<10} {'Err(rad)':<12} {'Err(°)':<10}")
         print(f"{'-'*60}")
         
         for i, name in enumerate(['L1', 'L2', 'L3', 'L4', 'L5', 'L6']):
@@ -78,22 +78,22 @@ class ZeroTest(Node):
         max_err = max(abs(e) for e in errors)
         avg_err = sum(abs(e) for e in errors) / 6
         print(f"{'-'*60}")
-        print(f"最大误差: {max_err:.4f} rad ({max_err*180/3.14159:.2f}°)")
-        print(f"平均误差: {avg_err:.4f} rad ({avg_err*180/3.14159:.2f}°)")
+        print(f"Max error: {max_err:.4f} rad ({max_err*180/3.14159:.2f}°)")
+        print(f"Avg error: {avg_err:.4f} rad ({avg_err*180/3.14159:.2f}°)")
         print(f"{'='*60}")
         
         return max_err, avg_err
     
     def monitor_loop(self, interval=1.0, count=None):
-        """持续监控位置"""
+        """Continuously monitor positions"""
         i = 0
         try:
             while count is None or i < count:
-                self.print_status(f"监控 #{i+1}")
+                self.print_status(f"Monitor #{i+1}")
                 time.sleep(interval)
                 i += 1
         except KeyboardInterrupt:
-            print("\n监控已停止")
+            print("\nMonitoring stopped")
 
 
 def main():
@@ -101,18 +101,18 @@ def main():
     
     tester = ZeroTest()
     
-    # 等待获取位置
+    # Wait for positions
     if not tester.wait_for_position():
-        tester.get_logger().error('无法获取关节位置，请检查控制器是否启动')
+        tester.get_logger().error('Failed to get joint positions. Check if controller is running.')
         rclpy.shutdown()
         return
     
     print("\n" + "="*60)
-    print("  回零误差监控工具")
-    print("  按 Ctrl+C 停止监控")
+    print("  Zeroing error monitor")
+    print("  Press Ctrl+C to stop")
     print("="*60)
     
-    # 持续监控
+    # Continuous monitoring
     tester.monitor_loop(interval=2.0)
     
     tester.destroy_node()

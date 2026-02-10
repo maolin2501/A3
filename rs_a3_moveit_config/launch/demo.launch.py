@@ -1,7 +1,7 @@
 """
 RS-A3 Robot Arm MoveIt Demo Launch File
 
-启动MoveIt运动规划界面（仿真模式）
+Launches MoveIt motion planning interface (simulation mode)
 """
 
 import os

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-RS-A3 Web Server with Flask and SocketIO.
-Provides web interface for robot control and monitoring.
+RS-A3 Web 服务器（Flask + SocketIO）。
+提供用于机器人控制与监控的 Web 界面。
 """
 
 import os
@@ -24,7 +24,7 @@ from ros2_bridge import get_bridge, shutdown_bridge, ROS2Bridge
 
 
 def find_resource_dirs():
-    """Find templates and static directories."""
+    """查找 templates 与 static 目录。"""
     # Check multiple possible locations
     possible_bases = [
         os.path.dirname(package_dir),  # Development: ros2_ws/src/rs_a3_web_ui/
@@ -82,22 +82,22 @@ bridge: Optional[ROS2Bridge] = None
 
 
 def init_ros2_bridge():
-    """Initialize ROS2 bridge."""
+    """初始化 ROS2 bridge。"""
     global bridge
     try:
         bridge = get_bridge()
         if bridge:
             bridge.set_state_callback(on_state_update)
             bridge.set_log_callback(on_log_message)
-            add_log('ROS2 Bridge initialized', 'info')
+            add_log('ROS2 Bridge 已初始化', 'info')
         else:
-            add_log('Failed to initialize ROS2 Bridge', 'error')
+            add_log('ROS2 Bridge 初始化失败', 'error')
     except Exception as e:
-        add_log(f'ROS2 Bridge error: {e}', 'error')
+        add_log(f'ROS2 Bridge 异常：{e}', 'error')
 
 
 def add_log(message: str, level: str = 'info'):
-    """Add log message to history."""
+    """将日志加入历史并推送到客户端。"""
     global log_history
     log_entry = {
         'timestamp': datetime.now().strftime('%H:%M:%S'),
@@ -113,7 +113,7 @@ def add_log(message: str, level: str = 'info'):
 
 
 def on_state_update(state: Dict):
-    """Callback when ROS2 state updates."""
+    """ROS2 状态更新回调。"""
     global state_history
     
     # Add to history
@@ -126,7 +126,7 @@ def on_state_update(state: Dict):
 
 
 def on_log_message(log: Dict):
-    """Callback for ROS2 log messages."""
+    """ROS2 日志回调。"""
     add_log(log['message'], log['level'])
 
 
@@ -134,26 +134,26 @@ def on_log_message(log: Dict):
 
 @app.route('/')
 def index():
-    """Serve main page."""
+    """主页。"""
     return render_template('index.html')
 
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
-    """Serve static files."""
+    """静态资源。"""
     return send_from_directory(app.static_folder, filename)
 
 
 @app.route('/urdf/<path:filename>')
 def serve_urdf(filename):
-    """Serve URDF and mesh files."""
+    """URDF 与网格资源。"""
     urdf_dir = os.path.join(app.static_folder, 'urdf')
     return send_from_directory(urdf_dir, filename)
 
 
 @app.route('/api/state')
 def api_get_state():
-    """Get current robot state."""
+    """获取当前机器人状态。"""
     if bridge:
         return jsonify(bridge.get_state())
     return jsonify({'error': 'Bridge not initialized'}), 503
@@ -161,19 +161,19 @@ def api_get_state():
 
 @app.route('/api/history')
 def api_get_history():
-    """Get state history for charts."""
+    """获取用于图表的状态历史。"""
     return jsonify(state_history)
 
 
 @app.route('/api/logs')
 def api_get_logs():
-    """Get log history."""
+    """获取日志历史。"""
     return jsonify(log_history)
 
 
 @app.route('/api/joint_limits')
 def api_get_joint_limits():
-    """Get joint limits from URDF."""
+    """获取关节限位。"""
     if bridge:
         return jsonify(bridge.JOINT_LIMITS)
     return jsonify({
@@ -188,7 +188,7 @@ def api_get_joint_limits():
 
 @app.route('/api/motor_status')
 def api_get_motor_status():
-    """Get motor enable status."""
+    """获取电机使能状态。"""
     if bridge:
         return jsonify({
             'enabled': bridge.get_motors_enabled()
@@ -198,7 +198,7 @@ def api_get_motor_status():
 
 @app.route('/api/teleop_status')
 def api_get_teleop_status():
-    """Get teleop node status."""
+    """获取 teleop 节点状态。"""
     if bridge:
         return jsonify({
             'status': bridge.get_teleop_status()
@@ -208,7 +208,7 @@ def api_get_teleop_status():
 
 @app.route('/api/can_interfaces')
 def api_get_can_interfaces():
-    """Get available CAN interfaces."""
+    """获取可用 CAN 接口列表。"""
     from ros2_bridge import ROS2Bridge
     interfaces = ROS2Bridge.get_available_can_interfaces()
     current = bridge.get_can_interface() if bridge else 'can0'
@@ -222,8 +222,8 @@ def api_get_can_interfaces():
 
 @socketio.on('connect')
 def handle_connect():
-    """Handle client connection."""
-    add_log(f'Client connected: {request.sid}', 'info')
+    """客户端连接事件。"""
+    add_log(f'客户端已连接：{request.sid}', 'info')
     
     # Send current state
     if bridge:
@@ -236,15 +236,15 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    """Handle client disconnection."""
-    add_log(f'Client disconnected: {request.sid}', 'info')
+    """客户端断开事件。"""
+    add_log(f'客户端已断开：{request.sid}', 'info')
 
 
 @socketio.on('command')
 def handle_command(data):
-    """Handle control commands from client."""
+    """处理来自客户端的控制指令。"""
     if not bridge:
-        emit('error', {'message': 'ROS2 bridge not available'})
+        emit('error', {'message': 'ROS2 bridge 不可用'})
         return
     
     cmd_type = data.get('type')
@@ -332,26 +332,26 @@ def handle_command(data):
             })
             
         else:
-            emit('error', {'message': f'Unknown command type: {cmd_type}'})
+            emit('error', {'message': f'未知命令类型：{cmd_type}'})
             
     except Exception as e:
-        add_log(f'Command error: {e}', 'error')
+        add_log(f'命令执行异常：{e}', 'error')
         emit('error', {'message': str(e)})
 
 
 @socketio.on('get_state')
 def handle_get_state():
-    """Handle state request."""
+    """处理状态请求。"""
     if bridge:
         emit('state', bridge.get_state())
     else:
-        emit('error', {'message': 'ROS2 bridge not available'})
+        emit('error', {'message': 'ROS2 bridge 不可用'})
 
 
 # ============ Main Entry Point ============
 
 def main():
-    """Main entry point."""
+    """主入口。"""
     import argparse
     
     parser = argparse.ArgumentParser(description='RS-A3 Web UI Server')
@@ -363,10 +363,10 @@ def main():
     
     print(f"""
 ╔═══════════════════════════════════════════════════════════╗
-║         RS-A3 Web Control Interface                       ║
+║                 RS-A3 Web 控制界面                        ║
 ╠═══════════════════════════════════════════════════════════╣
-║  Starting server on http://{args.host}:{args.port}              ║
-║  Open in browser to access the control panel              ║
+║  服务启动于 http://{args.host}:{args.port}                      ║
+║  请在浏览器打开以进入控制面板                               ║
 ╚═══════════════════════════════════════════════════════════╝
     """)
     
@@ -381,7 +381,7 @@ def main():
         # Run Flask with SocketIO
         socketio.run(app, host=args.host, port=args.port, debug=args.debug, allow_unsafe_werkzeug=True)
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        print("\n正在关闭...")
     finally:
         shutdown_bridge()
 

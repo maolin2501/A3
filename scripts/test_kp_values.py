@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-测试不同 Kp 值的归零误差
+Test zeroing error for different Kp values.
 Kp: 50, 100, 200, 300, Kd=1
 """
 
@@ -22,7 +22,7 @@ class KpTester(Node):
         self.current_positions = [0.0] * 6
         self.position_received = False
         
-        # 订阅关节状态
+        # Subscribe to joint states
         self.joint_state_sub = self.create_subscription(
             JointState,
             '/joint_states',
@@ -51,7 +51,7 @@ class KpTester(Node):
         return self.position_received
     
     def move_to_position(self, target_positions, duration=3.0):
-        """移动到目标位置"""
+        """Move to target position"""
         if not self.action_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('Action server not available')
             return False
@@ -78,8 +78,8 @@ class KpTester(Node):
         return True
     
     def get_current_errors(self, target=[0.0]*6):
-        """获取当前位置误差"""
-        # 更新位置
+        """Get current position errors"""
+        # Update positions
         for _ in range(10):
             rclpy.spin_once(self, timeout_sec=0.05)
         
@@ -90,34 +90,34 @@ class KpTester(Node):
         return errors
     
     def run_zero_test(self):
-        """运行归零测试"""
-        self.get_logger().info('开始归零测试...')
+        """Run zeroing test"""
+        self.get_logger().info('Starting zeroing test...')
         
-        # 等待获取初始位置
+        # Wait for initial positions
         if not self.wait_for_position():
-            self.get_logger().error('无法获取关节位置')
+            self.get_logger().error('Failed to get joint positions')
             return None
         
-        # 先移动到非零位置
-        self.get_logger().info('移动到初始位置 [0.5, -0.3, 0.4, -0.2, 0.3, -0.1]...')
+        # Move to a non-zero position first
+        self.get_logger().info('Moving to initial position [0.5, -0.3, 0.4, -0.2, 0.3, -0.1]...')
         self.move_to_position([0.5, -0.3, 0.4, -0.2, 0.3, -0.1], duration=3.0)
         time.sleep(1.0)
         
-        # 移动到零点
-        self.get_logger().info('移动到零点...')
+        # Move to zero
+        self.get_logger().info('Moving to zero...')
         self.move_to_position([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], duration=3.0)
         
-        # 等待稳定
+        # Wait to settle
         time.sleep(2.0)
         
-        # 采集多次误差取平均
+        # Collect errors multiple times and average
         all_errors = []
         for _ in range(10):
             errors = self.get_current_errors()
             all_errors.append(errors)
             time.sleep(0.1)
         
-        # 计算平均误差
+        # Compute average error
         avg_errors = []
         for j in range(6):
             avg = sum(e[j] for e in all_errors) / len(all_errors)
@@ -131,36 +131,36 @@ def main():
     
     tester = KpTester()
     
-    # 等待连接
-    tester.get_logger().info('等待 action server...')
+    # Wait for connection
+    tester.get_logger().info('Waiting for action server...')
     if not tester.action_client.wait_for_server(timeout_sec=10.0):
-        tester.get_logger().error('Action server 不可用')
+        tester.get_logger().error('Action server unavailable')
         rclpy.shutdown()
         return
     
-    tester.get_logger().info('开始归零测试 (当前 Kp/Kd 设置)')
+    tester.get_logger().info('Starting zeroing test (current Kp/Kd settings)')
     
-    # 运行测试
+    # Run test
     result = tester.run_zero_test()
     
     if result:
         avg_errors, final_pos = result
         
         print("\n" + "="*60)
-        print("归零测试结果")
+        print("Zeroing test results")
         print("="*60)
-        print(f"最终位置:")
+        print("Final positions:")
         for i, name in enumerate(['L1', 'L2', 'L3', 'L4', 'L5', 'L6']):
             print(f"  {name}: {final_pos[i]:.4f} rad ({final_pos[i]*180/3.14159:.2f}°)")
         
-        print(f"\n误差 (|目标-实际|):")
+        print("\nErrors (|target-actual|):")
         for i, name in enumerate(['L1', 'L2', 'L3', 'L4', 'L5', 'L6']):
             print(f"  {name}: {avg_errors[i]:.4f} rad ({avg_errors[i]*180/3.14159:.2f}°)")
         
         max_error = max(avg_errors)
         avg_error = sum(avg_errors) / len(avg_errors)
-        print(f"\n最大误差: {max_error:.4f} rad ({max_error*180/3.14159:.2f}°)")
-        print(f"平均误差: {avg_error:.4f} rad ({avg_error*180/3.14159:.2f}°)")
+        print(f"\nMax error: {max_error:.4f} rad ({max_error*180/3.14159:.2f}°)")
+        print(f"Avg error: {avg_error:.4f} rad ({avg_error*180/3.14159:.2f}°)")
         print("="*60)
     
     tester.destroy_node()

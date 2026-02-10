@@ -1,7 +1,7 @@
 """
 RS-A3 Robot Arm Control Launch File
 
-启动ros2_control控制器和机械臂硬件接口
+Launches ros2_control controllers and robot arm hardware interface
 """
 
 import os

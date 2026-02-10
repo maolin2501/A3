@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-使用MoveIt Servo的Xbox遥操作启动文件
-Servo使用雅可比矩阵进行增量控制，避免IK解跳变问题
+Xbox Teleoperation Launch File using MoveIt Servo
+Servo uses Jacobian matrix for incremental control, avoiding IK solution jumping issues
 """
 
 import os
@@ -16,19 +16,19 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    # 声明参数
+    # Declare arguments
     use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     can_interface = LaunchConfiguration('can_interface')
     
-    # 获取包路径
+    # Get package paths
     rs_a3_description_share = get_package_share_directory('rs_a3_description')
     rs_a3_moveit_config_share = get_package_share_directory('rs_a3_moveit_config')
     rs_a3_teleop_share = get_package_share_directory('rs_a3_teleop')
     
-    # 配置文件路径
+    # Config file path
     servo_config = os.path.join(rs_a3_moveit_config_share, 'config', 'servo_config.yaml')
     
-    # 参数声明
+    # Argument declarations
     declare_mock_hardware = DeclareLaunchArgument(
         'use_mock_hardware',
         default_value='false',
@@ -41,7 +41,7 @@ def generate_launch_description():
         description='CAN interface name'
     )
     
-    # 包含基础启动文件 (rs_a3_control.launch.py)
+    # Include base launch file (rs_a3_control.launch.py)
     bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(rs_a3_description_share, 'launch', 'rs_a3_control.launch.py')
@@ -52,14 +52,14 @@ def generate_launch_description():
         }.items(),
     )
     
-    # 包含MoveIt启动文件
+    # Include MoveIt launch file
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(rs_a3_moveit_config_share, 'launch', 'moveit.launch.py')
         ),
     )
     
-    # MoveIt Servo节点
+    # MoveIt Servo node
     servo_node = Node(
         package='moveit_servo',
         executable='servo_node',
@@ -71,9 +71,9 @@ def generate_launch_description():
         ],
     )
     
-    # Xbox Servo遥操作节点 - 延迟启动确保Servo准备就绪
+    # Xbox Servo teleoperation node - delayed start to ensure Servo is ready
     xbox_servo_node = TimerAction(
-        period=8.0,  # 延迟8秒启动
+        period=8.0,  # Delay 8 seconds before starting
         actions=[
             Node(
                 package='rs_a3_teleop',
@@ -91,7 +91,7 @@ def generate_launch_description():
         ]
     )
     
-    # Joy节点
+    # Joy node
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -110,7 +110,7 @@ def generate_launch_description():
         bringup_launch,
         moveit_launch,
         joy_node,
-        # Servo节点延迟启动
+        # Servo node delayed start
         TimerAction(
             period=5.0,
             actions=[servo_node]

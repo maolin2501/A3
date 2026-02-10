@@ -2,7 +2,7 @@
 
 controller_manager:
   ros__parameters:
-    update_rate: 200  # Hz - 提升至200Hz以获得更平滑的控制
+    update_rate: 200  # Hz - Increased to 200Hz for smoother control
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -27,24 +27,24 @@ arm_controller:
       - position
       - velocity
 
-    # 开环控制 - 忽略反馈位置，消除反馈噪声引起的命令抖动
-    # 底层电机驱动器仍有闭环PID控制，不会失控
+    # Open-loop control - ignores feedback position, eliminates command jitter caused by feedback noise
+    # Underlying motor drivers still have closed-loop PID control, preventing runaway
     open_loop_control: true
-    allow_nonzero_velocity_at_trajectory_end: true  # 允许轨迹末端有非零速度，提高平滑度
+    allow_nonzero_velocity_at_trajectory_end: true  # Allow non-zero velocity at trajectory end for smoother motion
     
-    # 轨迹插值设置 - 使用样条插值实现更平滑的运动
+    # Trajectory interpolation settings - use spline interpolation for smoother motion
     interpolation_method: splines
     
-    # 发布频率设置
-    state_publish_rate: 200.0   # 状态发布频率 (Hz)
-    action_monitor_rate: 50.0   # Action监控频率 (Hz)
+    # Publish rate settings
+    state_publish_rate: 200.0   # State publish rate (Hz)
+    action_monitor_rate: 50.0   # Action monitor rate (Hz)
     
-    # 目标到达容差设置 - 放宽容差以减少抖动
+    # Goal tolerance settings - relaxed tolerance to reduce jitter
     constraints:
-      stopped_velocity_tolerance: 0.1  # rad/s - 放宽速度容差
-      goal_time: 0.0  # 0 = 不检查时间，只检查位置
+      stopped_velocity_tolerance: 0.1  # rad/s - Relaxed velocity tolerance
+      goal_time: 0.0  # 0 = don't check time, only check position
       L1_joint:
-        goal: 0.03  # rad 位置容差 - 放宽
+        goal: 0.03  # rad position tolerance - relaxed
       L2_joint:
         goal: 0.03
       L3_joint:

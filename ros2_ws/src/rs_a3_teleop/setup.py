@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer='wy',
     maintainer_email='wy@todo.todo',
-    description='RS-A3机械臂Xbox手柄实时控制包',
+    description='RS-A3 robot arm Xbox controller real-time control package',
     license='Apache-2.0',
     extras_require={
         'test': [

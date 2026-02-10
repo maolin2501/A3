@@ -1,6 +1,6 @@
 /**
  * @file robstride_can_driver.cpp
- * @brief Implementation of Robstride motor CAN communication driver
+ * @brief Robstride 电机 CAN 通信驱动实现
  */
 
 #include "rs_a3_hardware/robstride_can_driver.hpp"
@@ -17,7 +17,7 @@
 namespace rs_a3_hardware
 {
 
-// Parameter indices
+// 参数索引
 constexpr uint16_t PARAM_RUN_MODE = 0x7005;
 constexpr uint16_t PARAM_LOC_REF = 0x7016;
 constexpr uint16_t PARAM_LIMIT_SPD = 0x7017;
@@ -29,7 +29,7 @@ RobstrideCanDriver::RobstrideCanDriver(const std::string& can_interface, uint8_t
   , socket_fd_(-1)
   , receive_running_(false)
 {
-  // Initialize feedback storage for motors 1-6
+  // 初始化反馈缓存（电机 ID 1-6）
   motor_feedbacks_.resize(16);
   motor_types_.resize(16, MotorType::RS00);
   
@@ -46,46 +46,46 @@ RobstrideCanDriver::~RobstrideCanDriver()
 
 bool RobstrideCanDriver::init()
 {
-  // Create socket
+  // 创建 socket
   socket_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
   if (socket_fd_ < 0) {
-    std::cerr << "[RobstrideCanDriver] Failed to create CAN socket: " << strerror(errno) << std::endl;
+    std::cerr << "[RobstrideCanDriver] 创建 CAN socket 失败: " << strerror(errno) << std::endl;
     return false;
   }
   
-  // Get interface index
+  // 获取接口索引
   struct ifreq ifr;
   std::strncpy(ifr.ifr_name, can_interface_.c_str(), IFNAMSIZ - 1);
   ifr.ifr_name[IFNAMSIZ - 1] = '\0';
   
   if (ioctl(socket_fd_, SIOCGIFINDEX, &ifr) < 0) {
-    std::cerr << "[RobstrideCanDriver] Failed to get interface index for " 
-              << can_interface_ << ": " << strerror(errno) << std::endl;
+    std::cerr << "[RobstrideCanDriver] 获取接口索引失败（" 
+              << can_interface_ << "）: " << strerror(errno) << std::endl;
     ::close(socket_fd_);
     socket_fd_ = -1;
     return false;
   }
   
-  // Bind socket
+  // 绑定 socket
   struct sockaddr_can addr;
   std::memset(&addr, 0, sizeof(addr));
   addr.can_family = AF_CAN;
   addr.can_ifindex = ifr.ifr_ifindex;
   
   if (bind(socket_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    std::cerr << "[RobstrideCanDriver] Failed to bind CAN socket: " << strerror(errno) << std::endl;
+    std::cerr << "[RobstrideCanDriver] 绑定 CAN socket 失败: " << strerror(errno) << std::endl;
     ::close(socket_fd_);
     socket_fd_ = -1;
     return false;
   }
   
-  // Set receive timeout
+  // 设置接收超时
   struct timeval tv;
   tv.tv_sec = 0;
   tv.tv_usec = 100000;  // 100ms
   setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   
-  std::cout << "[RobstrideCanDriver] Initialized on " << can_interface_ << std::endl;
+  std::cout << "[RobstrideCanDriver] 已在 " << can_interface_ << " 上初始化" << std::endl;
   return true;
 }
 
@@ -94,7 +94,7 @@ void RobstrideCanDriver::close()
   if (socket_fd_ >= 0) {
     ::close(socket_fd_);
     socket_fd_ = -1;
-    std::cout << "[RobstrideCanDriver] Closed CAN interface" << std::endl;
+    std::cout << "[RobstrideCanDriver] 已关闭 CAN 接口" << std::endl;
   }
 }
 
@@ -108,7 +108,7 @@ uint32_t RobstrideCanDriver::buildExtendedCanId(uint8_t comm_type, uint16_t data
   id |= (static_cast<uint32_t>(comm_type) & 0x1F) << 24;
   id |= (static_cast<uint32_t>(data_area2) & 0xFFFF) << 8;
   id |= target_id & 0xFF;
-  return id | CAN_EFF_FLAG;  // Set extended frame flag
+  return id | CAN_EFF_FLAG;  // 设置扩展帧标志位
 }
 
 bool RobstrideCanDriver::sendFrame(const can_frame& frame)
@@ -132,11 +132,11 @@ bool RobstrideCanDriver::sendFrame(const can_frame& frame)
     }
     
     // 其他错误直接返回失败
-    std::cerr << "[RobstrideCanDriver] Failed to send CAN frame: " << strerror(errno) << std::endl;
+    std::cerr << "[RobstrideCanDriver] 发送 CAN 帧失败: " << strerror(errno) << std::endl;
     return false;
   }
   
-  std::cerr << "[RobstrideCanDriver] Failed to send CAN frame after " << max_retries << " retries: " << strerror(errno) << std::endl;
+  std::cerr << "[RobstrideCanDriver] 重试 " << max_retries << " 次后仍发送 CAN 帧失败: " << strerror(errno) << std::endl;
   return false;
 }
 
@@ -185,7 +185,7 @@ bool RobstrideCanDriver::enableMotor(uint8_t motor_id)
     return false;
   }
   
-  std::cout << "[RobstrideCanDriver] Motor " << static_cast<int>(motor_id) << " enabled" << std::endl;
+  std::cout << "[RobstrideCanDriver] 电机 " << static_cast<int>(motor_id) << " 已使能" << std::endl;
   return true;
 }
 
@@ -207,7 +207,7 @@ bool RobstrideCanDriver::disableMotor(uint8_t motor_id, bool clear_fault)
     return false;
   }
   
-  std::cout << "[RobstrideCanDriver] Motor " << static_cast<int>(motor_id) << " disabled" << std::endl;
+  std::cout << "[RobstrideCanDriver] 电机 " << static_cast<int>(motor_id) << " 已失能" << std::endl;
   return true;
 }
 
@@ -226,7 +226,7 @@ bool RobstrideCanDriver::setZeroPosition(uint8_t motor_id)
     return false;
   }
   
-  std::cout << "[RobstrideCanDriver] Motor " << static_cast<int>(motor_id) << " zero position set" << std::endl;
+  std::cout << "[RobstrideCanDriver] 电机 " << static_cast<int>(motor_id) << " 机械零位已设置" << std::endl;
   return true;
 }
 
@@ -272,7 +272,7 @@ bool RobstrideCanDriver::sendMotionControl(
   uint16_t kp_raw = floatToUint16(kp, params.kp_min, params.kp_max);
   uint16_t kd_raw = floatToUint16(kd, params.kd_min, params.kd_max);
   
-  // Pack data (high byte first)
+  // 数据打包（高字节在前）
   frame.data[0] = (pos_raw >> 8) & 0xFF;
   frame.data[1] = pos_raw & 0xFF;
   frame.data[2] = (vel_raw >> 8) & 0xFF;
@@ -282,15 +282,15 @@ bool RobstrideCanDriver::sendMotionControl(
   frame.data[6] = (kd_raw >> 8) & 0xFF;
   frame.data[7] = kd_raw & 0xFF;
   
-  // 调试：检查发送的原始数据
+  // 调试：检查发送的原始数据（低频率，避免阻塞执行器）
   static int debug_count = 0;
-  if (debug_count++ % 3000 == 0) {
+  if (debug_count++ % 60000 == 0) {
     if (motor_id == 1 || motor_id == 2) {
       std::cout << "[CAN TX] Motor " << static_cast<int>(motor_id)
                 << ": pos_cmd=" << position
                 << ", pos_raw=" << pos_raw
                 << ", torque_raw=" << torque_raw
-                << " (in CAN ID, 0Nm=32768)" << std::endl;
+                << "（写入 CAN ID，0Nm≈32768）" << std::endl;
     }
   }
   
@@ -311,7 +311,7 @@ bool RobstrideCanDriver::writeParameter(uint8_t motor_id, uint16_t param_index, 
   frame.data[1] = (param_index >> 8) & 0xFF;
   frame.data[2] = 0;
   
-  // Float value (little endian)
+  // 浮点值（小端序）
   uint32_t value_raw;
   std::memcpy(&value_raw, &value, sizeof(float));
   frame.data[4] = value_raw & 0xFF;
@@ -363,9 +363,9 @@ void RobstrideCanDriver::receiveThreadFunc()
   
   while (receive_running_) {
     if (receiveFrame(frame, 10)) {
-      // Check if it's an extended frame
+      // 检查是否为扩展帧
       if (frame.can_id & CAN_EFF_FLAG) {
-        // Extract communication type and motor ID from 29-bit extended ID
+        // 从 29 位扩展 ID 中提取通信类型与电机 ID
         // 通信类型2反馈帧结构:
         // Bit28~24: 通信类型 (=2)
         // Bit23~22: 模式状态
@@ -376,14 +376,14 @@ void RobstrideCanDriver::receiveThreadFunc()
         uint8_t comm_type = (can_id >> 24) & 0x1F;
         uint8_t motor_id = (can_id >> 8) & 0xFF;  // 电机ID在bit8~15
         
-        // Debug: print received frame info periodically
-        if (++recv_count >= 500) {
+        // 调试：周期性打印接收帧信息（低频率，避免阻塞执行器）
+        if (++recv_count >= 60000) {
           recv_count = 0;
-          std::cout << "[RobstrideCanDriver] Recv CAN ID: 0x" << std::hex << can_id 
-                    << ", comm_type: " << std::dec << static_cast<int>(comm_type)
-                    << ", motor_id: " << static_cast<int>(motor_id) << std::endl;
+          std::cout << "[RobstrideCanDriver] 接收 CAN ID: 0x" << std::hex << can_id 
+                    << "，comm_type: " << std::dec << static_cast<int>(comm_type)
+                    << "，motor_id: " << static_cast<int>(motor_id) << std::endl;
           // 打印反馈统计
-          std::cout << "[RobstrideCanDriver] Feedback counts - M1:" << motor_feedback_count[1]
+          std::cout << "[RobstrideCanDriver] 反馈计数 - M1:" << motor_feedback_count[1]
                     << " M2:" << motor_feedback_count[2]
                     << " M3:" << motor_feedback_count[3]
                     << " M4:" << motor_feedback_count[4]
@@ -415,7 +415,7 @@ void RobstrideCanDriver::parseFeedback(const can_frame& frame, MotorType motor_t
   
   MotorFeedback& fb = motor_feedbacks_[motor_id];
   
-  // Parse data (high byte first) - 通信类型2数据格式
+  // 解析数据（高字节在前）- 通信类型2数据格式
   // Byte0~1: 当前角度 [0~65535] 对应 (P_MIN~P_MAX)
   // Byte2~3: 当前角速度 [0~65535] 对应 (V_MIN~V_MAX)
   // Byte4~5: 当前力矩 [0~65535] 对应 (T_MIN~T_MAX)
@@ -431,7 +431,7 @@ void RobstrideCanDriver::parseFeedback(const can_frame& frame, MotorType motor_t
   fb.torque = uint16ToFloat(torque_raw, params.t_min, params.t_max);
   fb.temperature = static_cast<double>(temp_raw) / 10.0;
   
-  // Extract mode and fault from CAN ID
+  // 从 CAN ID 提取模式状态与故障信息
   // Bit22~23: 模式状态 (0=Reset, 1=Cali, 2=Motor)
   // Bit16~21: 故障信息
   fb.mode_state = (can_id >> 22) & 0x03;
@@ -458,7 +458,7 @@ void RobstrideCanDriver::setMotorType(uint8_t motor_id, MotorType type)
   if (motor_id < motor_types_.size()) {
     motor_types_[motor_id] = type;
     std::cout << "[RobstrideCanDriver] Motor " << static_cast<int>(motor_id) 
-              << " type set to " << (type == MotorType::RS00 ? "RS00" : "RS05") << std::endl;
+              << " 电机型号已设置为 " << (type == MotorType::RS00 ? "RS00" : "RS05") << std::endl;
   }
 }
 

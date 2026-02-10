@@ -1,8 +1,8 @@
 #!/bin/bash
-# 安装xpadneo驱动（专门用于蓝牙Xbox手柄）
+# Install xpadneo driver (specifically for Bluetooth Xbox controllers)
 
 echo "========================================"
-echo "   安装xpadneo蓝牙Xbox手柄驱动"
+echo "   Install xpadneo Bluetooth Xbox Controller Driver"
 echo "========================================"
 echo ""
 
@@ -11,24 +11,24 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 检查是否已安装
+# Check if already installed
 if dkms status | grep -q hid-xpadneo; then
-    echo -e "${GREEN}xpadneo驱动已安装${NC}"
+    echo -e "${GREEN}xpadneo driver is already installed${NC}"
     echo ""
-    echo "重新加载驱动..."
+    echo "Reloading driver..."
     echo "2501" | sudo -S modprobe -r hid-xpadneo 2>/dev/null
     echo "2501" | sudo -S modprobe hid-xpadneo
-    echo -e "${GREEN}✓ 驱动已重新加载${NC}"
+    echo -e "${GREEN}✓ Driver reloaded${NC}"
     exit 0
 fi
 
-echo -e "${BLUE}下载xpadneo驱动...${NC}"
+echo -e "${BLUE}Downloading xpadneo driver...${NC}"
 cd /tmp
 rm -rf xpadneo
 git clone https://github.com/atar-axis/xpadneo.git
 
 if [ $? -ne 0 ]; then
-    echo "Git克隆失败，尝试下载release版本..."
+    echo "Git clone failed, trying to download release version..."
     wget https://github.com/atar-axis/xpadneo/archive/refs/tags/v0.9.5.tar.gz
     tar xzf v0.9.5.tar.gz
     cd xpadneo-0.9.5
@@ -37,25 +37,24 @@ else
 fi
 
 echo ""
-echo -e "${BLUE}安装xpadneo驱动...${NC}"
+echo -e "${BLUE}Installing xpadneo driver...${NC}"
 echo "2501" | sudo -S ./install.sh
 
 if [ $? -eq 0 ]; then
     echo ""
-    echo -e "${GREEN}✓ xpadneo驱动安装成功！${NC}"
+    echo -e "${GREEN}✓ xpadneo driver installed successfully!${NC}"
     echo ""
-    echo "重启蓝牙服务..."
+    echo "Restarting Bluetooth service..."
     echo "2501" | sudo -S systemctl restart bluetooth
     echo ""
-    echo -e "${YELLOW}请断开并重新连接Xbox手柄：${NC}"
-    echo "1. 在蓝牙设置中断开Xbox手柄"
-    echo "2. 按住Xbox按钮重新连接"
-    echo "3. 然后运行: ls /dev/input/js*"
+    echo -e "${YELLOW}Please disconnect and reconnect the Xbox controller:${NC}"
+    echo "1. Disconnect the Xbox controller in Bluetooth settings"
+    echo "2. Hold the Xbox button to reconnect"
+    echo "3. Then run: ls /dev/input/js*"
 else
     echo ""
-    echo "安装失败，请检查错误信息"
+    echo "Installation failed, please check error messages"
 fi
-
 
 
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-RS-A3 遥操作测试程序2
+RS-A3 teleoperation test program 2
 
-通过 can1 主臂控制 can0, can2, can3, can4 四个从臂
+Use master arm on can1 to control slave arms on can0, can2, can3, can4
 
-使用方法：
+Usage:
     python3 test_teleop_can1_master.py
 """
 
@@ -23,8 +23,8 @@ from enum import IntEnum
 
 
 class MotorType(IntEnum):
-    RS00 = 0  # 1-3号关节
-    RS05 = 1  # 4-6号关节
+    RS00 = 0  # Joints 1-3
+    RS05 = 1  # Joints 4-6
 
 
 @dataclass
@@ -48,7 +48,7 @@ MOTOR_PARAMS = {
 
 MOTOR_TYPE_MAP = {1: MotorType.RS00, 2: MotorType.RS00, 3: MotorType.RS00,
                   4: MotorType.RS05, 5: MotorType.RS05, 6: MotorType.RS05,
-                  7: MotorType.RS05}  # 7号电机：夹爪
+                  7: MotorType.RS05}  # Motor 7: gripper
 
 
 @dataclass
@@ -62,7 +62,7 @@ class MotorFeedback:
 
 
 class CANInterface:
-    """简化的 CAN 接口"""
+    """Simplified CAN interface"""
     
     def __init__(self, interface: str, host_can_id: int = 0xFD):
         self.interface = interface
@@ -78,10 +78,10 @@ class CANInterface:
             self.socket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
             self.socket.bind((self.interface,))
             self.socket.settimeout(0.1)
-            print(f"[{self.interface}] 已连接")
+            print(f"[{self.interface}] Connected")
             return True
         except Exception as e:
-            print(f"[{self.interface}] 连接失败: {e}")
+            print(f"[{self.interface}] Connection failed: {e}")
             return False
     
     def disconnect(self):
@@ -192,13 +192,13 @@ class CANInterface:
 
 
 class TeleopTest:
-    """遥操作测试：can1 主臂 -> can0, can2, can3, can4 从臂"""
+    """Teleoperation test: can1 master -> can0, can2, can3, can4 slaves"""
     
     def __init__(self):
-        # 主臂：can1
+        # Master arm: can1
         self.master = CANInterface('can1')
         
-        # 从臂：can0, can2, can3, can4
+        # Slave arms: can0, can2, can3, can4
         self.slaves: List[CANInterface] = [
             CANInterface('can0'),
             CANInterface('can2'),
@@ -207,30 +207,30 @@ class TeleopTest:
         ]
         self.slave_names = ['can0', 'can2', 'can3', 'can4']
         
-        self.motor_ids = [1, 2, 3, 4, 5, 6, 7]  # 包含夹爪电机
+        self.motor_ids = [1, 2, 3, 4, 5, 6, 7]  # Includes gripper motor
         self.running = False
         
-        # 控制参数
-        self.master_kd = 0.0      # 主臂阻尼（完全无力矩）
-        self.slave_kp = 50.0      # 从臂 Kp
-        self.slave_kd = 2.0       # 从臂 Kd
-        self.rate = 200.0         # 控制频率 Hz
+        # Control parameters
+        self.master_kd = 0.0      # Master damping (zero torque)
+        self.slave_kp = 50.0      # Slave Kp
+        self.slave_kd = 2.0       # Slave Kd
+        self.rate = 200.0         # Control frequency (Hz)
         
         self.loop_count = 0
         self.last_print = time.time()
     
     def connect(self) -> bool:
-        # 连接主臂
+        # Connect master arm
         if not self.master.connect():
             return False
         
-        # 连接所有从臂
+        # Connect all slave arms
         connected_slaves = []
         for i, slave in enumerate(self.slaves):
             if slave.connect():
                 connected_slaves.append(slave)
             else:
-                # 断开已连接的
+                # Disconnect already-connected interfaces
                 self.master.disconnect()
                 for s in connected_slaves:
                     s.disconnect()
@@ -244,10 +244,10 @@ class TeleopTest:
             slave.disconnect()
     
     def enable_motors(self):
-        print("[INFO] 使能电机...")
+        print("[INFO] Enabling motors...")
         
-        # 第一步：清除故障并设置运控模式
-        print("[DEBUG] 步骤1: 清除故障并设置运控模式")
+        # Step 1: clear faults and set motion control mode
+        print("[DEBUG] Step 1: clear faults and set motion control mode")
         print("  [master: can1]")
         for motor_id in self.motor_ids:
             self.master.disable_motor(motor_id, clear_fault=True)
@@ -263,8 +263,8 @@ class TeleopTest:
         
         time.sleep(0.1)
         
-        # 第二步：使能电机
-        print("[DEBUG] 步骤2: 使能电机")
+        # Step 2: enable motors
+        print("[DEBUG] Step 2: enable motors")
         print("  [master: can1]")
         for motor_id in self.motor_ids:
             ok = self.master.enable_motor(motor_id)
@@ -278,40 +278,40 @@ class TeleopTest:
                 print(f"    M{motor_id}: {ok}")
                 time.sleep(0.02)
         
-        # 等待反馈更新
+        # Wait for feedback update
         time.sleep(0.3)
         
-        # 第三步：检查从臂反馈
-        print("[DEBUG] 步骤3: 检查从臂反馈")
+        # Step 3: check slave feedback
+        print("[DEBUG] Step 3: check slave feedback")
         for name, slave in zip(self.slave_names, self.slaves):
             print(f"  [{name}]")
             for motor_id in self.motor_ids:
                 fb = slave.get_feedback(motor_id)
                 if fb and fb.is_valid:
-                    print(f"    M{motor_id}: pos={fb.position:.3f} (有效)")
+                    print(f"    M{motor_id}: pos={fb.position:.3f} (valid)")
                 else:
-                    print(f"    M{motor_id}: 无反馈!")
+                    print(f"    M{motor_id}: no feedback!")
         
-        # 第四步：发送初始命令
-        print("[DEBUG] 步骤4: 发送初始命令")
+        # Step 4: send initial commands
+        print("[DEBUG] Step 4: send initial commands")
         for motor_id in self.motor_ids:
             fb = self.master.get_feedback(motor_id)
             pos = fb.position if fb and fb.is_valid else 0.0
             
-            # 主臂：完全无力矩（Kp=0, Kd=0, torque=0）
+            # Master: zero torque (Kp=0, Kd=0, torque=0)
             self.master.send_motion(motor_id, pos, 0.0, 0.0, 0.0, 0.0)
             
-            # 所有从臂：跟随主臂位置
+            # All slaves: follow master position
             for slave in self.slaves:
                 slave.send_motion(motor_id, pos, 0.0, self.slave_kp, self.slave_kd, 0.0)
             
             print(f"  M{motor_id}: pos={pos:.3f} -> slaves Kp={self.slave_kp}")
             time.sleep(0.01)
         
-        print("[INFO] 电机已使能")
+        print("[INFO] Motors enabled")
     
     def disable_motors(self):
-        print("[INFO] 停止电机...")
+        print("[INFO] Stopping motors...")
         for motor_id in self.motor_ids:
             self.master.disable_motor(motor_id)
             for slave in self.slaves:
@@ -322,29 +322,29 @@ class TeleopTest:
         self.running = True
         dt = 1.0 / self.rate
         
-        print(f"\n[INFO] 遥操作启动")
-        print(f"  主臂: can1")
-        print(f"  从臂: can0, can2, can3, can4")
-        print(f"  从臂: Kp={self.slave_kp}, Kd={self.slave_kd}")
-        print(f"  控制频率: {self.rate} Hz")
-        print("[INFO] 按 Ctrl+C 停止\n")
+        print(f"\n[INFO] Teleoperation started")
+        print(f"  Master: can1")
+        print(f"  Slaves: can0, can2, can3, can4")
+        print(f"  Slave gains: Kp={self.slave_kp}, Kd={self.slave_kd}")
+        print(f"  Control frequency: {self.rate} Hz")
+        print("[INFO] Press Ctrl+C to stop\n")
         
         while self.running:
             t0 = time.time()
             
-            # 读取主臂位置并发送命令
+            # Read master position and send commands
             for motor_id in self.motor_ids:
                 fb = self.master.get_feedback(motor_id)
                 pos = fb.position if fb and fb.is_valid else 0.0
                 
-                # 主臂：完全无力矩
+                # Master: zero torque
                 self.master.send_motion(motor_id, pos, 0.0, 0.0, 0.0, 0.0)
                 
-                # 所有从臂：跟随主臂位置
+                # All slaves: follow master position
                 for slave in self.slaves:
                     slave.send_motion(motor_id, pos, 0.0, self.slave_kp, self.slave_kd, 0.0)
             
-            # 打印状态（每秒一次）
+            # Print status once per second
             self.loop_count += 1
             now = time.time()
             if now - self.last_print >= 1.0:
@@ -352,23 +352,23 @@ class TeleopTest:
                 self.last_print = now
                 self.loop_count = 0
                 
-                # 显示主臂位置
+                # Show master positions
                 m_info = []
                 for mid in self.motor_ids:
                     fb_m = self.master.get_feedback(mid)
                     m_info.append(f"{fb_m.position:.2f}" if fb_m and fb_m.is_valid else "N/A")
                 
-                print(f"[{actual_freq:.0f}Hz] 主臂(can1): {' '.join(m_info)}")
+                print(f"[{actual_freq:.0f}Hz] Master(can1): {' '.join(m_info)}")
                 
-                # 显示各从臂位置
+                # Show each slave's positions
                 for name, slave in zip(self.slave_names, self.slaves):
                     s_info = []
                     for mid in self.motor_ids:
                         fb_s = slave.get_feedback(mid)
                         s_info.append(f"{fb_s.position:.2f}" if fb_s and fb_s.is_valid else "N/A")
-                    print(f"        从臂({name}): {' '.join(s_info)}")
+                    print(f"        Slave({name}): {' '.join(s_info)}")
             
-            # 控制频率
+            # Control frequency
             elapsed = time.time() - t0
             if elapsed < dt:
                 time.sleep(dt - elapsed)
@@ -379,30 +379,30 @@ class TeleopTest:
 
 def main():
     print("=" * 50)
-    print("  RS-A3 遥操作测试2")
-    print("  主臂: can1")
-    print("  从臂: can0, can2, can3, can4")
+    print("  RS-A3 Teleoperation Test 2")
+    print("  Master: can1")
+    print("  Slaves: can0, can2, can3, can4")
     print("=" * 50)
     
     teleop = TeleopTest()
     
     def signal_handler(sig, frame):
-        print("\n[INFO] 停止中...")
+        print("\n[INFO] Stopping...")
         teleop.stop()
     
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
         if not teleop.connect():
-            print("[ERROR] 连接失败")
+            print("[ERROR] Connection failed")
             return 1
         
-        # 启动主臂和所有从臂的接收线程
+        # Start receive threads for master and slaves
         teleop.master.start_recv()
         for slave in teleop.slaves:
             slave.start_recv()
         
-        time.sleep(0.5)  # 等待反馈
+        time.sleep(0.5)  # Wait for feedback
         
         teleop.enable_motors()
         time.sleep(0.5)

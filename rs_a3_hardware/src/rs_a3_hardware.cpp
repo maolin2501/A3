@@ -1,6 +1,6 @@
 /**
  * @file rs_a3_hardware.cpp
- * @brief Implementation of ROS2 Control hardware interface for RS-A3 robot arm
+ * @brief RS-A3 机械臂 ROS2 Control 硬件接口实现
  */
 
 #include "rs_a3_hardware/rs_a3_hardware.hpp"
@@ -24,24 +24,24 @@ namespace rs_a3_hardware
 RsA3HardwareInterface::RsA3HardwareInterface()
   : can_interface_("can0")
   , host_can_id_(0xFD)
-  , position_kp_(60.0)    // 降低Kp减少振荡
-  , position_kd_(3.5)     // 增加Kd提高阻尼
+  , position_kp_(60.0)    // 降低 Kp 以减小振荡
+  , position_kd_(3.5)     // 增大 Kd 以提高阻尼
   , velocity_limit_(10.0)
   , control_mode_(ControlMode::POSITION)
   , use_mock_hardware_(false)
-  , s_curve_enabled_(true)       // 默认启用S曲线规划
+  , s_curve_enabled_(true)       // 默认启用 S 曲线规划
   , zero_torque_mode_(false)
   , zero_torque_kd_(1.0)
   , gravity_comp_enabled_(false)
-  , gravity_feedforward_ratio_(0.5)  // 默认50%重力补偿前馈
+  , gravity_feedforward_ratio_(0.5)  // 默认 50% 重力补偿前馈
   , use_pinocchio_gravity_(false)    // 默认使用简化重力模型
   , pinocchio_initialized_(false)
-  , use_calibrated_inertia_(false)   // 默认不使用标定后的惯性参数
-  , spin_thread_running_(false)      // 线程运行标志初始化
-  , limit_margin_(0.15)          // 15度开始减速 (~8.6°)
-  , limit_stop_margin_(0.02)     // 1度硬停止 (~1.1°)
-  , limit_decel_factor_(0.3)     // 减速到30%
-  , max_jerk_(50.0)              // 默认最大加加速度 50 rad/s³ (S曲线规划)
+  , use_calibrated_inertia_(false)   // 默认不使用标定后的惯量参数
+  , spin_thread_running_(false)      // 服务回调线程运行标志初始化
+  , limit_margin_(0.15)          // 约在 ~15° 处开始减速（≈8.6°）
+  , limit_stop_margin_(0.02)     // 约在 ~1° 处硬停止（≈1.1°）
+  , limit_decel_factor_(0.3)     // 减速到 30%
+  , max_jerk_(50.0)              // 默认最大加加速度 50 rad/s³（S 曲线规划）
 {
 }
 
@@ -64,7 +64,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // Parse parameters
+  // 解析参数
   if (info_.hardware_parameters.count("can_interface")) {
     can_interface_ = info_.hardware_parameters.at("can_interface");
   }
@@ -84,12 +84,12 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     use_mock_hardware_ = info_.hardware_parameters.at("use_mock_hardware") == "true";
   }
 
-  // Parse joint configurations
+  // 解析关节配置
   if (!parseJointConfig(info)) {
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // Resize state and command vectors
+  // 分配状态与指令向量
   size_t num_joints = joint_configs_.size();
   hw_positions_.resize(num_joints, 0.0);
   hw_velocities_.resize(num_joints, 0.0);
@@ -99,28 +99,28 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   hw_commands_velocities_.resize(num_joints, 0.0);
   hw_commands_efforts_.resize(num_joints, 0.0);
   
-  // 初始化位置命令平滑滤波器（带速度/加速度/加加速度限制 - S曲线规划）
+  // 初始化位置指令平滑滤波（含速度/加速度/加加速度限制 - S 曲线规划）
   smoothed_positions_.resize(num_joints, 0.0);
   smoothed_velocities_.resize(num_joints, 0.0);
-  smoothed_accelerations_.resize(num_joints, 0.0);  // S曲线规划用
+  smoothed_accelerations_.resize(num_joints, 0.0);  // 用于 S 曲线规划
   
-  // 初始化速度前馈计算相关变量
-  last_cmd_positions_.resize(num_joints, 0.0);       // 上一周期命令位置
-  last_hw_commands_positions_.resize(num_joints, 0.0); // 上一帧hw_commands（用于检测命令更新）
-  cmd_velocities_.resize(num_joints, 0.0);           // 计算的命令速度
-  filtered_cmd_velocities_.resize(num_joints, 0.0);  // 滤波后的命令速度（一阶）
-  velocity_ff_stage2_.resize(num_joints, 0.0);       // 速度前馈二阶滤波中间值
-  velocity_filter_alpha_ = 0.3;                      // 速度滤波系数
+  // 初始化速度前馈相关变量
+  last_cmd_positions_.resize(num_joints, 0.0);         // 上一周期指令位置
+  last_hw_commands_positions_.resize(num_joints, 0.0); // 上一帧 hw_commands（用于检测指令更新）
+  cmd_velocities_.resize(num_joints, 0.0);             // 计算得到的指令速度
+  filtered_cmd_velocities_.resize(num_joints, 0.0);    // 一阶滤波后的指令速度
+  velocity_ff_stage2_.resize(num_joints, 0.0);         // 二阶滤波中间量
+  velocity_filter_alpha_ = 0.3;                        // 速度滤波系数
   
   // 默认参数
-  smoothing_alpha_ = 0.08;      // 平滑系数（降低使运动更平滑）
+  smoothing_alpha_ = 0.08;      // 平滑系数（越小越平滑）
   max_velocity_ = 2.0;          // 最大速度 2 rad/s
   max_acceleration_ = 8.0;      // 最大加速度 8 rad/s²
-  max_jerk_ = 50.0;             // 最大加加速度 50 rad/s³（S曲线规划）
-  control_period_ = 0.005;      // 默认200Hz -> 5ms周期
+  max_jerk_ = 50.0;             // 最大加加速度 50 rad/s³（S 曲线规划）
+  control_period_ = 0.005;      // 默认 200Hz -> 5ms
   first_command_ = true;
-  gravity_feedforward_ratio_ = 0.5;  // 默认50%重力补偿前馈
-  s_curve_enabled_ = true;      // 默认启用S曲线
+  gravity_feedforward_ratio_ = 0.5;  // 默认 50% 重力补偿前馈
+  s_curve_enabled_ = true;      // 默认启用 S 曲线
   
   // 从参数读取平滑系数
   if (info_.hardware_parameters.count("smoothing_alpha")) {
@@ -128,27 +128,27 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     smoothing_alpha_ = std::clamp(smoothing_alpha_, 0.01, 1.0);
   }
   
-  // 从参数读取速度限制
+  // 从参数读取速度上限
   if (info_.hardware_parameters.count("max_velocity")) {
     max_velocity_ = std::stod(info_.hardware_parameters.at("max_velocity"));
   }
   
-  // 从参数读取加速度限制
+  // 从参数读取加速度上限
   if (info_.hardware_parameters.count("max_acceleration")) {
     max_acceleration_ = std::stod(info_.hardware_parameters.at("max_acceleration"));
   }
   
-  // 从参数读取加加速度限制（S曲线规划）
+  // 从参数读取加加速度上限（S 曲线规划）
   if (info_.hardware_parameters.count("max_jerk")) {
     max_jerk_ = std::stod(info_.hardware_parameters.at("max_jerk"));
   }
   
-  // 从参数读取S曲线使能
+  // 从参数读取 S 曲线开关
   if (info_.hardware_parameters.count("s_curve_enabled")) {
     s_curve_enabled_ = info_.hardware_parameters.at("s_curve_enabled") == "true";
   }
   
-  // 初始化S曲线生成器（每个关节一个）
+  // 初始化 S 曲线生成器（每个关节一个）
   s_curve_generators_.clear();
   for (size_t i = 0; i < num_joints; ++i) {
     s_curve_generators_.push_back(
@@ -161,7 +161,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     gravity_feedforward_ratio_ = std::clamp(gravity_feedforward_ratio_, 0.0, 1.0);
   }
   
-  // 从参数读取限位保护参数
+  // 从参数读取关节限位保护参数
   if (info_.hardware_parameters.count("limit_margin")) {
     limit_margin_ = std::stod(info_.hardware_parameters.at("limit_margin"));
   }
@@ -173,22 +173,22 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     limit_decel_factor_ = std::clamp(limit_decel_factor_, 0.0, 1.0);
   }
   
-  // 初始化限位保护状态
+  // 初始化关节限位保护状态
   joint_at_limit_.resize(num_joints, false);
   limit_warn_counter_.resize(num_joints, 0);
 
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Initialized with %zu joints on %s", num_joints, can_interface_.c_str());
+              "已初始化：%zu 个关节，CAN 接口：%s", num_joints, can_interface_.c_str());
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "  S-curve: %s, max_vel=%.1f rad/s, max_acc=%.1f rad/s², max_jerk=%.1f rad/s³", 
-              s_curve_enabled_ ? "ENABLED" : "DISABLED",
+              "  S 曲线：%s，max_vel=%.1f rad/s，max_acc=%.1f rad/s²，max_jerk=%.1f rad/s³",
+              s_curve_enabled_ ? "启用" : "禁用",
               max_velocity_, max_acceleration_, max_jerk_);
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "  PID: Kp=%.1f, Kd=%.1f, gravity_feedforward_ratio=%.0f%%", 
+              "  PID：Kp=%.1f，Kd=%.1f，重力补偿前馈比例=%.0f%%",
               position_kp_, position_kd_, gravity_feedforward_ratio_ * 100.0);
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Joint limit protection: margin=%.3f rad, stop_margin=%.3f rad, decel_factor=%.2f",
+              "关节限位保护：margin=%.3f rad，stop_margin=%.3f rad，decel_factor=%.2f",
               limit_margin_, limit_stop_margin_, limit_decel_factor_);
 
   // 初始化调试发布器节点
@@ -200,16 +200,16 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   temperature_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/motor_temperature", 10);
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Debug publishers created: /debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, /debug/velocity_feedforward, /debug/motor_temperature");
+              "调试发布器已创建：/debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, /debug/velocity_feedforward, /debug/motor_temperature");
 
   // ============ 初始化重力补偿参数 ============
   gravity_params_.resize(num_joints);
   for (size_t i = 0; i < num_joints; ++i) {
-    gravity_params_[i] = {0.0, 0.0, 0.0};  // 默认为0
+    gravity_params_[i] = {0.0, 0.0, 0.0};  // Default to 0
   }
   
-  // 从参数读取重力补偿（如果有）
-  // 格式: gravity_comp_L1_sin, gravity_comp_L1_cos, gravity_comp_L1_offset 等
+  // 从参数读取重力补偿（如果存在）
+  // 格式：gravity_comp_L1_sin, gravity_comp_L1_cos, gravity_comp_L1_offset 等
   std::vector<std::string> joint_prefixes = {"L1", "L2", "L3", "L4", "L5", "L6"};
   for (size_t i = 0; i < num_joints && i < joint_prefixes.size(); ++i) {
     std::string prefix = "gravity_comp_" + joint_prefixes[i];
@@ -224,7 +224,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     }
   }
   
-  // 检查是否有任何非零重力补偿参数
+  // 检查是否存在非零重力补偿参数
   for (size_t i = 0; i < num_joints; ++i) {
     if (gravity_params_[i].sin_coeff != 0.0 || 
         gravity_params_[i].cos_coeff != 0.0 || 
@@ -236,7 +236,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   
   if (gravity_comp_enabled_) {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Gravity compensation enabled with parameters:");
+                "重力补偿已启用，参数如下：");
     for (size_t i = 0; i < num_joints && i < joint_prefixes.size(); ++i) {
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
                   "  %s: sin=%.4f, cos=%.4f, offset=%.4f",
@@ -247,7 +247,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     }
   }
   
-  // 读取零力矩模式Kd参数
+  // 读取零力矩模式的 Kd 参数
   if (info_.hardware_parameters.count("zero_torque_kd")) {
     zero_torque_kd_ = std::stod(info_.hardware_parameters.at("zero_torque_kd"));
   }
@@ -264,7 +264,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
         use_pinocchio_gravity_ = (info_.hardware_parameters.at("use_pinocchio_gravity") == "true");
       }
       
-      // 读取惯性参数缩放因子（用于标定微调）
+      // 读取惯量缩放因子（用于标定微调）
       inertia_scale_params_.resize(joint_configs_.size());
       for (size_t i = 0; i < joint_configs_.size(); ++i) {
         inertia_scale_params_[i].mass_scale = 1.0;
@@ -287,24 +287,24 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
         }
       }
       
-      // 读取惯性参数配置文件路径
+      // 读取惯量配置文件路径
       if (info_.hardware_parameters.count("inertia_config_path")) {
         inertia_config_path_ = info_.hardware_parameters.at("inertia_config_path");
         
-        // 加载标定后的惯性参数
+        // 加载标定后的惯量参数
         if (loadCalibratedInertia(inertia_config_path_)) {
           // 应用到 Pinocchio 模型
           applyCalibratedInertiaToModel();
           use_calibrated_inertia_ = true;
           RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                      "Calibrated inertia parameters loaded from: %s", inertia_config_path_.c_str());
+                      "已从以下路径加载标定惯量参数：%s", inertia_config_path_.c_str());
         }
       }
       
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Pinocchio gravity compensation: %s (calibrated inertia: %s)", 
-                  use_pinocchio_gravity_ ? "ENABLED" : "DISABLED",
-                  use_calibrated_inertia_ ? "YES" : "NO");
+                  "Pinocchio 重力补偿：%s（标定惯量：%s）",
+                  use_pinocchio_gravity_ ? "启用" : "禁用",
+                  use_calibrated_inertia_ ? "是" : "否");
     }
   }
   
@@ -314,21 +314,21 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     std::bind(&RsA3HardwareInterface::zeroTorqueModeCallback, this,
               std::placeholders::_1, std::placeholders::_2));
   
-  // 启动单独的线程来处理服务回调
+  // 启动独立线程处理服务回调
   spin_thread_running_ = true;
   spin_thread_ = std::thread([this]() {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Debug node spin thread started");
+                "调试节点 spin 线程已启动");
     while (spin_thread_running_ && rclcpp::ok()) {
       rclcpp::spin_some(debug_node_);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 100Hz
     }
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Debug node spin thread stopped");
+                "调试节点 spin 线程已停止");
   });
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Zero torque mode service created: /rs_a3/set_zero_torque_mode (Kd=%.1f)", zero_torque_kd_);
+              "零力矩模式服务已创建：/rs_a3/set_zero_torque_mode（Kd=%.1f）", zero_torque_kd_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -346,7 +346,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       config.motor_id = std::stoi(joint.parameters.at("motor_id"));
     } else {
       RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                   "Joint %s missing motor_id parameter", joint.name.c_str());
+                   "关节 %s 缺少 motor_id 参数", joint.name.c_str());
       return false;
     }
     
@@ -359,7 +359,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
         config.motor_type = MotorType::RS05;
       } else {
         RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                     "Unknown motor_type %s for joint %s", type_str.c_str(), joint.name.c_str());
+                     "关节 %s 的 motor_type 未知：%s", joint.name.c_str(), type_str.c_str());
         return false;
       }
     } else {
@@ -381,8 +381,8 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       config.direction = 1.0;
     }
     
-    // Parse joint limits (从参数或command_interface获取)
-    config.lower_limit = -6.28;  // 默认±360°
+    // Parse joint limits (from parameters or command_interface)
+    config.lower_limit = -6.28;  // Default ±360°
     config.upper_limit = 6.28;
     
     if (joint.parameters.count("lower_limit")) {
@@ -392,10 +392,10 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       config.upper_limit = std::stod(joint.parameters.at("upper_limit"));
     }
     
-    // 尝试从command_interface获取限位（ros2_control标准方式）
+    // Try to get limits from command_interface (ros2_control standard method)
     for (const auto& cmd_if : joint.command_interfaces) {
       if (cmd_if.name == "position") {
-        if (cmd_if.min != cmd_if.max) {  // 有效的限位
+        if (cmd_if.min != cmd_if.max) {  // Valid limits
           config.lower_limit = std::stod(cmd_if.min);
           config.upper_limit = std::stod(cmd_if.max);
         }
@@ -403,7 +403,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       }
     }
     
-    // Parse joint-specific Kp/Kd (0表示使用全局值)
+    // Parse joint-specific Kp/Kd (0 means use global value)
     config.kp = 0.0;
     config.kd = 0.0;
     if (joint.parameters.count("kp")) {
@@ -417,7 +417,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
     
     if (config.kp > 0.0 || config.kd > 0.0) {
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Joint %s: motor_id=%d, type=%s, dir=%.1f, limits=[%.1f°~%.1f°], Kp=%.0f, Kd=%.1f",
+                  "关节 %s：motor_id=%d，type=%s，dir=%.1f，限位=[%.1f°~%.1f°]，Kp=%.0f，Kd=%.1f",
                   config.name.c_str(), config.motor_id,
                   config.motor_type == MotorType::RS00 ? "RS00" : "RS05",
                   config.direction,
@@ -425,7 +425,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
                   config.kp, config.kd);
     } else {
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Joint %s: motor_id=%d, type=%s, dir=%.1f, limits=[%.1f°~%.1f°]",
+                  "关节 %s：motor_id=%d，type=%s，dir=%.1f，限位=[%.1f°~%.1f°]",
                   config.name.c_str(), config.motor_id,
                   config.motor_type == MotorType::RS00 ? "RS00" : "RS05",
                   config.direction,
@@ -441,29 +441,29 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_configure(
 {
   if (use_mock_hardware_) {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Using mock hardware - skipping CAN initialization");
+                "使用 mock 硬件：跳过 CAN 初始化");
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
-  // Create and initialize CAN driver
+  // 创建并初始化 CAN 驱动
   can_driver_ = std::make_unique<RobstrideCanDriver>(can_interface_, host_can_id_);
   
   if (!can_driver_->init()) {
     RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                 "Failed to initialize CAN driver on %s", can_interface_.c_str());
+                 "CAN 驱动初始化失败：%s", can_interface_.c_str());
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // Set motor types for each joint (with delay to avoid CAN buffer overflow)
+  // 为每个关节设置电机型号（添加延时避免 CAN 缓冲区溢出）
   for (const auto& config : joint_configs_) {
     can_driver_->setMotorType(config.motor_id, config.motor_type);
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // 添加延迟
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // Add delay
   }
 
-  // Start receive thread
+  // 启动接收线程
   can_driver_->startReceiveThread();
 
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "Hardware configured on %s", can_interface_.c_str());
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "硬件已配置完成：%s", can_interface_.c_str());
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -476,7 +476,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_cleanup(
     can_driver_.reset();
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "Hardware cleaned up");
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "硬件资源已清理");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -485,79 +485,79 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_activate(
 {
   if (use_mock_hardware_) {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Mock hardware activated");
+                "Mock 硬件已激活");
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
-  // ============ 步骤0: 清除所有电机故障 ============
+  // ============ 步骤 0：清除所有电机故障 ============
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Clearing motor faults...");
+              "正在清除电机故障...");
   for (const auto& config : joint_configs_) {
     can_driver_->disableMotor(config.motor_id, true);  // clear_fault=true
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   
-  // ============ 步骤1: 使能所有电机（用Kp=0，不控制位置）============
-  // 电机未使能时不发送反馈，所以必须先使能
+  // ============ 步骤 1：使能所有电机（Kp=0，无位置控制） ============
+  // 电机在失能状态不会回传反馈，因此必须先使能
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Enabling motors in soft mode (Kp=0)...");
+              "正在以软模式使能电机（Kp=0）...");
   
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     const auto& config = joint_configs_[i];
     
-    // 1. 先停止电机（不清除故障，因为已经清除过了）
+    // 1) 先停止电机（不清故障，前面已清过）
     can_driver_->disableMotor(config.motor_id, false);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     
-    // 2. 设置运行模式为运控模式 (run_mode = 0)
+    // 2) 设置为运控模式（run_mode = 0）
     if (!can_driver_->setRunMode(config.motor_id, RunMode::MOTION_CONTROL)) {
       RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                   "Failed to set Motion Control mode for motor %d", config.motor_id);
+                   "电机 %d 设置运控模式失败", config.motor_id);
       return hardware_interface::CallbackReturn::ERROR;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     
-    // 3. 使能电机
+    // 3) 使能电机
     if (!can_driver_->enableMotor(config.motor_id)) {
       RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                   "Failed to enable motor %d", config.motor_id);
+                   "电机 %d 使能失败", config.motor_id);
       return hardware_interface::CallbackReturn::ERROR;
     }
     
-    // 4. 【关键】发送 Kp=0 的命令，使电机处于柔软状态，不追踪任何位置
-    //    这样即使发送任意位置命令，电机也不会移动
+    // 4) [关键] 发送 Kp=0 的指令，使电机进入“软”状态，不跟踪任何位置
+    //    这样即使发送任意位置指令，电机也不会运动
     can_driver_->sendMotionControl(
         config.motor_id,
         config.motor_type,
-        0.0,          // 位置无所谓，因为Kp=0
+        0.0,          // 位置无关紧要，因为 Kp=0
         0.0,          // velocity = 0
-        0.0,          // Kp = 0 (不追踪位置!)
-        4.0,          // Kd = 4.0 (增加阻尼防止晃动)
+        0.0,          // Kp = 0（不跟踪位置！）
+        4.0,          // Kd = 4.0（提高阻尼，防止抖动）
         0.0           // torque = 0
     );
     
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Motor %d enabled in soft mode (Kp=0, Kd=4)", config.motor_id);
+                "电机 %d 已以软模式使能（Kp=0，Kd=4）", config.motor_id);
     
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  // ============ 步骤2: 开环控制 - 使用默认位置(0)，不等待反馈 ============
+  // ============ 步骤 2：开环控制 - 使用默认位置 (0)，跳过反馈等待 ============
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Open-loop mode: Using default position (0.0) for all joints - skipping feedback");
+              "开环模式：所有关节使用默认位置 0.0，跳过反馈等待");
   
   std::vector<double> initial_positions(joint_configs_.size(), 0.0);
   
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     const auto& config = joint_configs_[i];
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Motor %d initial position: 0.0 rad (open-loop)", config.motor_id);
+                "电机 %d 初始位置：0.0 rad（开环）", config.motor_id);
   }
 
-  // ============ 步骤3: 用真实位置发送保持命令（切换到正常控制）============
+  // ============ 步骤 3：发送保持指令（切换到正常控制） ============
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Switching to position hold mode...");
+              "正在切换到位置保持模式...");
   
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     const auto& config = joint_configs_[i];
@@ -569,7 +569,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_activate(
     smoothed_velocities_[i] = 0.0;
     smoothed_accelerations_[i] = 0.0;
     
-    // 初始化S曲线生成器状态
+    // 初始化 S 曲线生成器状态
     if (s_curve_enabled_ && i < s_curve_generators_.size()) {
       s_curve_generators_[i]->initialize(initial_positions[i], 0.0, 0.0);
     }
@@ -577,31 +577,31 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_activate(
     // 计算电机坐标系下的位置
     double motor_pos = initial_positions[i] * config.direction + config.position_offset;
     
-    // 发送保持当前位置的命令（正常Kp/Kd）
+    // 发送“保持当前位置”指令（正常 Kp/Kd）
     can_driver_->sendMotionControl(
         config.motor_id,
         config.motor_type,
-        motor_pos,        // 使用真实位置
+        motor_pos,        // 使用当前位置
         0.0,              // velocity = 0
-        position_kp_,     // 正常Kp
-        position_kd_,     // 正常Kd
+        position_kp_,     // 正常 Kp
+        position_kd_,     // 正常 Kd
         0.0               // torque = 0
     );
     
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Motor %d holding at %.4f rad (Kp=%.0f, Kd=%.1f)", 
+                "电机 %d 保持在 %.4f rad（Kp=%.0f，Kd=%.1f）",
                 config.motor_id, initial_positions[i], position_kp_, position_kd_);
     
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "All %zu motors initialized successfully", joint_configs_.size());
+              "全部 %zu 个电机初始化成功", joint_configs_.size());
   
   first_command_ = false;
 
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), 
-              "Hardware activated with CSP Position mode");
+              "硬件已激活（CSP 位置模式）");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -609,14 +609,14 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_deactivate(
   const rclcpp_lifecycle::State& /*previous_state*/)
 {
   if (!use_mock_hardware_ && can_driver_) {
-    // Disable all motors
+    // 失能所有电机
     for (const auto& config : joint_configs_) {
       can_driver_->disableMotor(config.motor_id);
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "Hardware deactivated");
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "硬件已停用");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -626,7 +626,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_shutdown(
   on_deactivate(rclcpp_lifecycle::State());
   on_cleanup(rclcpp_lifecycle::State());
   
-  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "Hardware shutdown");
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), "硬件已关闭");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -634,13 +634,13 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_error(
   const rclcpp_lifecycle::State& /*previous_state*/)
 {
   if (!use_mock_hardware_ && can_driver_) {
-    // Emergency stop - disable all motors and clear faults
+    // 急停：失能所有电机并清故障
     for (const auto& config : joint_configs_) {
       can_driver_->disableMotor(config.motor_id, true);
     }
   }
 
-  RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"), "Hardware error occurred");
+  RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"), "硬件发生错误");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -658,7 +658,7 @@ std::vector<hardware_interface::StateInterface> RsA3HardwareInterface::export_st
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         joint_configs_[i].name, hardware_interface::HW_IF_EFFORT, &hw_efforts_[i]));
-    // 添加温度状态接口
+    // Add temperature state interface
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         joint_configs_[i].name, "temperature", &hw_temperatures_[i]));
@@ -689,14 +689,14 @@ std::vector<hardware_interface::CommandInterface> RsA3HardwareInterface::export_
 hardware_interface::return_type RsA3HardwareInterface::read(
   const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
 {
-  // ============ 从电机实际读取所有状态 ============
+  // ============ Read all states from actual motors ============
   if (!use_mock_hardware_ && can_driver_) {
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       const auto& config = joint_configs_[i];
       auto feedback = can_driver_->getMotorFeedback(config.motor_id);
       
       if (feedback.is_valid) {
-        // 从电机坐标系转换到关节坐标系
+        // Convert from motor coordinate frame to joint coordinate frame
         // motor_pos = joint_pos * direction + offset
         // joint_pos = (motor_pos - offset) / direction = (motor_pos - offset) * direction
         hw_positions_[i] = (feedback.position - config.position_offset) * config.direction;
@@ -706,7 +706,7 @@ hardware_interface::return_type RsA3HardwareInterface::read(
       }
     }
   } else {
-    // Mock模式：使用命令值
+    // Mock 模式：使用指令值作为状态
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       hw_positions_[i] = smoothed_positions_[i];
       hw_velocities_[i] = smoothed_velocities_[i];
@@ -715,7 +715,7 @@ hardware_interface::return_type RsA3HardwareInterface::read(
     }
   }
   
-  // 发布温度数据（降低频率，每 50 次读取发布一次）
+  // 发布温度数据（降频：每 50 次 read 发布一次）
   static int temp_pub_counter = 0;
   if (++temp_pub_counter >= 50) {
     temp_pub_counter = 0;
@@ -744,39 +744,39 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     return hardware_interface::return_type::ERROR;
   }
 
-  // 获取实际控制周期
+  // Get actual control period
   double dt = period.seconds();
   if (dt <= 0.0 || dt > 0.1) {
-    dt = control_period_;  // 使用默认周期
+    dt = control_period_;  // Use default period
   }
 
-  // 【平滑滤波】第一次命令时直接设置，避免从0开始平滑
+  // [Smoothing filter] Set directly on first command, avoid smoothing from 0
   if (first_command_) {
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       smoothed_positions_[i] = hw_commands_positions_[i];
       smoothed_velocities_[i] = 0.0;
       smoothed_accelerations_[i] = 0.0;
       
-      // 初始化速度前馈相关变量，避免第一次计算产生跳变
+      // Initialize velocity feedforward variables, avoid jump on first computation
       last_cmd_positions_[i] = hw_commands_positions_[i];
       filtered_cmd_velocities_[i] = 0.0;
-      velocity_ff_stage2_[i] = 0.0;  // 二阶滤波中间值
+      velocity_ff_stage2_[i] = 0.0;  // 2nd-order filter intermediate value
       
-      // 初始化S曲线生成器
+      // Initialize S-curve generators
       if (s_curve_enabled_ && i < s_curve_generators_.size()) {
         s_curve_generators_[i]->initialize(hw_commands_positions_[i], 0.0, 0.0);
       }
     }
     first_command_ = false;
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "First command received, initializing positions (S-curve: %s)",
-                s_curve_enabled_ ? "ENABLED" : "DISABLED");
+                "收到首条指令，正在初始化位置（S 曲线：%s）",
+                s_curve_enabled_ ? "启用" : "禁用");
   }
   
-  // ============ 【整体限位保护】已禁用 ============
+  // ============ [Global joint limit protection] DISABLED ============
   bool global_stop = false;
   
-  // ============ 检测命令是否更新（解决IK跳帧导致的速度跳变）============
+  // ============ Detect if command has been updated (solve velocity jump caused by IK frame skip) ============
   bool command_updated = false;
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     if (std::abs(hw_commands_positions_[i] - last_hw_commands_positions_[i]) > 1e-8) {
@@ -784,52 +784,52 @@ hardware_interface::return_type RsA3HardwareInterface::write(
       break;
     }
   }
-  // 更新记录
+  // Update records
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     last_hw_commands_positions_[i] = hw_commands_positions_[i];
   }
   
-  // ============ 预计算 Pinocchio 重力补偿向量（如果启用）============
+  // ============ Pre-compute Pinocchio gravity compensation vector (if enabled) ============
   std::vector<double> pinocchio_gravity_torques;
   if (use_pinocchio_gravity_ && pinocchio_initialized_) {
     pinocchio_gravity_torques = computePinocchioGravity(hw_positions_);
   }
   
-  // 使用运控模式发送命令
+  // Send commands using motion control mode
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     const auto& config = joint_configs_[i];
     
-    // ============ 位置命令处理 ============
+    // ============ Position command processing ============
     double new_position = hw_commands_positions_[i];
     
-    // 【修正】先计算速度（在更新位置之前！）
+    // [Fix] Compute velocity first (before updating position!)
     double raw_cmd_velocity = (new_position - smoothed_positions_[i]) / dt;
     
-    // 更新状态（用于read()反馈和调试）
+    // Update state (for read() feedback and debug)
     double new_velocity = raw_cmd_velocity;
     double new_acceleration = (new_velocity - smoothed_velocities_[i]) / dt;
     smoothed_positions_[i] = new_position;
     smoothed_velocities_[i] = new_velocity;
     smoothed_accelerations_[i] = new_acceleration;
     
-    // 【关节限位保护】已禁用
+    // [Joint limit protection] DISABLED
     double limit_factor = 1.0;
     (void)limit_factor;
     (void)global_stop;
     
-    // 将关节坐标转换为电机坐标
+    // Convert joint coordinates to motor coordinates
     double cmd_position = smoothed_positions_[i] * config.direction + config.position_offset;
     
     // Clamp position to motor valid range
     auto params = getMotorParams(config.motor_type);
     cmd_position = std::clamp(cmd_position, params.p_min, params.p_max);
     
-    // ============ 计算速度前馈（根据命令是否更新决定计算方式）============
+    // ============ Compute velocity feedforward (based on whether command updated) ============
     double filtered_velocity;
     
     if (command_updated) {
-      // 命令已更新，正常计算速度前馈
-      // 位置差死区：微小速度不产生输出
+      // Command updated, compute velocity feedforward normally
+      // Position difference deadzone: tiny velocity produces no output
       const double velocity_threshold = 0.001;  // 0.001 rad/s
       double cmd_velocity;
       if (std::abs(raw_cmd_velocity) < velocity_threshold) {
@@ -838,18 +838,18 @@ hardware_interface::return_type RsA3HardwareInterface::write(
         cmd_velocity = raw_cmd_velocity;
       }
       
-      // 限制速度在合理范围内
+      // Clamp velocity to valid range
       cmd_velocity = std::clamp(cmd_velocity, -velocity_limit_, velocity_limit_);
       
-      // 二阶滤波
-      double alpha1 = 0.1;  // 一阶滤波
+      // 2nd-order filter
+      double alpha1 = 0.1;  // 1st-order filter
       double first_stage = alpha1 * cmd_velocity + (1.0 - alpha1) * filtered_cmd_velocities_[i];
       filtered_cmd_velocities_[i] = first_stage;
       
-      double alpha2 = 0.15;  // 二阶滤波
+      double alpha2 = 0.15;  // 2nd-order filter
       filtered_velocity = alpha2 * first_stage + (1.0 - alpha2) * velocity_ff_stage2_[i];
       
-      // 加速度限制
+      // Acceleration limiting
       double max_velocity_change = max_acceleration_ * dt;
       double velocity_change = filtered_velocity - velocity_ff_stage2_[i];
       if (std::abs(velocity_change) > max_velocity_change) {
@@ -857,13 +857,13 @@ hardware_interface::return_type RsA3HardwareInterface::write(
                             max_velocity_change * (velocity_change > 0 ? 1.0 : -1.0);
       }
     } else {
-      // 命令未更新（IK跳帧），速度平滑衰减而不是重新计算
-      filtered_velocity = velocity_ff_stage2_[i] * 0.95;  // 衰减5%
-      // 同时更新一阶滤波状态，保持一致性
+      // Command not updated (IK frame skip), smooth velocity decay instead of recomputation
+      filtered_velocity = velocity_ff_stage2_[i] * 0.95;  // Decay by 5%
+      // Also update 1st-order filter state for consistency
       filtered_cmd_velocities_[i] *= 0.95;
     }
     
-    // 速度死区：极小速度直接归零
+    // Velocity deadzone: very small velocity zeroed out
     const double velocity_deadzone = 0.005;  // 0.005 rad/s
     if (std::abs(filtered_velocity) < velocity_deadzone) {
       filtered_velocity = 0.0;
@@ -871,87 +871,87 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     
     velocity_ff_stage2_[i] = filtered_velocity;
     
-    // 转换为电机坐标系的速度
+    // Convert to motor coordinate frame velocity
     double motor_cmd_velocity = velocity_ff_stage2_[i] * config.direction;
     
-    // Debug: 定期输出日志
+    // Debug: periodic log output
     if (write_counter % 1000 == 0 && i == 0) {
       RCLCPP_DEBUG(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "[Velocity FF] raw=%.3f, filtered=%.3f", 
+                  "[速度前馈] 原始=%.3f，滤波后=%.3f",
                   raw_cmd_velocity, filtered_velocity);
     }
     
-    // ============ 计算重力补偿力矩（按比例作为前馈）============
+    // ============ Compute gravity compensation torque (as feedforward by ratio) ============
     double gravity_torque = 0.0;
     if (gravity_comp_enabled_) {
       if (use_pinocchio_gravity_ && pinocchio_initialized_ && i < pinocchio_gravity_torques.size()) {
-        // 使用 Pinocchio 完整动力学计算（考虑所有关节级联效应）
+        // Use Pinocchio full dynamics computation (considering all joint cascading effects)
         gravity_torque = pinocchio_gravity_torques[i] * gravity_feedforward_ratio_;
       } else {
-        // 使用简化模型（单关节独立）
+        // Use simplified model (per-joint independent)
         gravity_torque = computeGravityTorque(i, hw_positions_[i]) * gravity_feedforward_ratio_;
       }
     }
     
-    // ============ 根据模式选择控制参数 ============
+    // ============ Select control parameters based on mode ============
     double motor_kp, motor_kd, cmd_torque;
     double final_cmd_position;
     
     if (zero_torque_mode_) {
-      // 零力矩模式: Kp=0, Kd=阻尼, 仅重力补偿（100%用于零力矩模式）
+      // Zero-torque mode: Kp=0, Kd=damping, only gravity compensation (100% for zero-torque mode)
       motor_kp = 0.0;
       motor_kd = std::clamp(zero_torque_kd_, 0.0, 5.0);
       
-      // 零力矩模式使用100%重力补偿
+      // Zero-torque mode uses 100% gravity compensation
       if (use_pinocchio_gravity_ && pinocchio_initialized_ && i < pinocchio_gravity_torques.size()) {
-        cmd_torque = pinocchio_gravity_torques[i];  // Pinocchio 完整动力学
+        cmd_torque = pinocchio_gravity_torques[i];  // Pinocchio full dynamics
       } else {
-        cmd_torque = computeGravityTorque(i, hw_positions_[i]);  // 简化模型
+        cmd_torque = computeGravityTorque(i, hw_positions_[i]);  // Simplified model
       }
       
-      // 位置发送当前实际位置（不产生位置误差）
+      // Send current actual position (no position error)
       final_cmd_position = hw_positions_[i] * config.direction + config.position_offset;
     } else {
-      // 正常位置控制模式 - 使用关节独立Kp/Kd（如果设置了），否则使用全局值
+      // Normal position control mode - use per-joint Kp/Kd (if configured), otherwise use global values
       double joint_kp = (config.kp > 0.0) ? config.kp : position_kp_;
       double joint_kd = (config.kd > 0.0) ? config.kd : position_kd_;
       motor_kp = std::clamp(joint_kp, 0.0, 500.0);
       motor_kd = std::clamp(joint_kd, 0.0, 5.0);
-      cmd_torque = gravity_torque;  // 按gravity_feedforward_ratio_比例的重力补偿前馈
+      cmd_torque = gravity_torque;  // Gravity compensation feedforward at gravity_feedforward_ratio_ ratio
       final_cmd_position = cmd_position;
     }
     
-    // 计算最终发送的速度前馈（零力矩模式下发送0速度）
+    // Compute final velocity feedforward to send (send 0 velocity in zero-torque mode)
     double final_cmd_velocity = zero_torque_mode_ ? 0.0 : motor_cmd_velocity;
     
     if (!can_driver_->sendMotionControl(
           config.motor_id,
           config.motor_type,
           final_cmd_position,
-          final_cmd_velocity,  // 速度前馈（位置差分计算）
+          final_cmd_velocity,  // Velocity feedforward (position differential)
           motor_kp,
           motor_kd,
-          cmd_torque // 重力补偿前馈力矩
+          cmd_torque // Gravity compensation feedforward torque
         )) {
-      // 使用静态计数器替代 THROTTLE 避免 Clock 问题
+      // Use static counter instead of THROTTLE to avoid Clock issues
       static int warn_counter = 0;
       if (warn_counter++ % 1000 == 0) {
         RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-          "Failed to send motion control command to motor %d", config.motor_id);
+          "向电机 %d 发送运控指令失败", config.motor_id);
       }
     }
     
-    // 添加帧间微延迟，防止CAN缓冲区拥塞（6帧×50μs=300μs，远小于5ms控制周期）
+    // Add inter-frame micro-delay, prevent CAN buffer congestion (6 frames × 50μs = 300μs, much less than 5ms control period)
     usleep(50);
   }
 
-  // 注意：服务回调现在在单独的 spin_thread_ 中处理，无需在此调用 spin_some
+  // Note: Service callbacks now handled in separate spin_thread_, no need to call spin_some here
 
-  // 发布调试信息（每10次发布一次，约20Hz）
+  // Publish debug info (every 10 cycles, ~20Hz)
   if (write_counter % 10 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
     auto now = debug_node_->get_clock()->now();
     
-    // 发布控制器命令位置
+    // Publish controller command positions
     sensor_msgs::msg::JointState hw_cmd_msg;
     hw_cmd_msg.header.stamp = now;
     for (const auto& config : joint_configs_) {
@@ -960,7 +960,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     hw_cmd_msg.position = hw_commands_positions_;
     hw_cmd_pub_->publish(hw_cmd_msg);
     
-    // 发布平滑后的命令位置（实际发给电机的）
+    // Publish smoothed command positions (actually sent to motors)
     sensor_msgs::msg::JointState smoothed_msg;
     smoothed_msg.header.stamp = now;
     smoothed_msg.name = hw_cmd_msg.name;
@@ -968,7 +968,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     smoothed_msg.velocity = smoothed_velocities_;
     smoothed_cmd_pub_->publish(smoothed_msg);
     
-    // 发布重力补偿力矩
+    // Publish gravity compensation torques
     if (gravity_comp_enabled_ && gravity_torque_pub_) {
       sensor_msgs::msg::JointState gravity_msg;
       gravity_msg.header.stamp = now;
@@ -980,7 +980,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     }
   }
   
-  // 【改进】速度前馈单独高频发布（每帧200Hz，用于高频分析）
+  // [Improved] Velocity feedforward published at high frequency (every frame at 200Hz, for high-frequency analysis)
   if (velocity_ff_pub_ && debug_node_) {
     auto now = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState velocity_ff_msg;
@@ -988,7 +988,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     for (const auto& config : joint_configs_) {
       velocity_ff_msg.name.push_back(config.name);
     }
-    velocity_ff_msg.velocity = velocity_ff_stage2_;  // 使用二阶滤波后的速度
+    velocity_ff_msg.velocity = velocity_ff_stage2_;  // Using 2nd-order filtered velocity
     velocity_ff_pub_->publish(velocity_ff_msg);
   }
 
@@ -1016,13 +1016,13 @@ void RsA3HardwareInterface::zeroTorqueModeCallback(
   
   if (zero_torque_mode_) {
     RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                "ZERO TORQUE MODE ENABLED! Kp=0, Kd=%.1f, Gravity Comp=%s",
-                zero_torque_kd_, gravity_comp_enabled_ ? "ON" : "OFF");
-    response->message = "Zero torque mode enabled - robot can be manually moved";
+                "零力矩模式已启用！Kp=0，Kd=%.1f，重力补偿=%s",
+                zero_torque_kd_, gravity_comp_enabled_ ? "开启" : "关闭");
+    response->message = "零力矩模式已启用：机械臂可手动拖动";
   } else {
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Zero torque mode disabled - returning to position control");
-    response->message = "Zero torque mode disabled - position control active";
+                "零力矩模式已关闭：恢复位置控制");
+    response->message = "零力矩模式已关闭：位置控制生效";
   }
   
   response->success = true;
@@ -1039,32 +1039,32 @@ double RsA3HardwareInterface::computeLimitProtectionFactor(
   double lower = config.lower_limit;
   double upper = config.upper_limit;
   
-  // 计算到边界的距离
+  // Calculate distance to boundary
   double dist_to_lower = current_pos - lower;
   double dist_to_upper = upper - current_pos;
   
-  // 确定运动方向
+  // Determine motion direction
   double motion_dir = target_pos - current_pos;
   
-  // 选择相关边界距离
+  // Select relevant boundary distance
   double relevant_dist;
   if (motion_dir < 0) {
-    // 向下限移动
+    // Moving toward lower limit
     relevant_dist = dist_to_lower;
   } else if (motion_dir > 0) {
-    // 向上限移动
+    // Moving toward upper limit
     relevant_dist = dist_to_upper;
   } else {
-    return 1.0;  // 没有运动
+    return 1.0;  // No motion
   }
   
-  // 如果在限位边界内，计算减速系数
+  // If within limit boundary, compute deceleration factor
   if (relevant_dist < limit_margin_) {
     if (relevant_dist <= limit_stop_margin_) {
-      // 硬停止区域
+      // Hard stop zone
       return 0.0;
     }
-    // 线性减速区域: 从limit_decel_factor_到1.0
+    // Linear deceleration zone: from limit_decel_factor_ to 1.0
     double ratio = (relevant_dist - limit_stop_margin_) / (limit_margin_ - limit_stop_margin_);
     return limit_decel_factor_ + (1.0 - limit_decel_factor_) * ratio;
   }
@@ -1084,7 +1084,7 @@ bool RsA3HardwareInterface::applyJointLimitProtection(size_t joint_idx, double& 
   
   bool hit_limit = false;
   
-  // 检查并钳位目标位置
+  // Check and clamp target position
   if (target_pos < lower + limit_stop_margin_) {
     target_pos = lower + limit_stop_margin_;
     hit_limit = true;
@@ -1093,19 +1093,19 @@ bool RsA3HardwareInterface::applyJointLimitProtection(size_t joint_idx, double& 
     hit_limit = true;
   }
   
-  // 限位警告（每100次触发打印一次，防止刷屏）
+  // Joint limit warning (print every 100 triggers to prevent log flooding)
   if (hit_limit) {
     if (!joint_at_limit_[joint_idx]) {
       joint_at_limit_[joint_idx] = true;
       RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "⚠️ Joint %s reached limit! pos=%.3f rad (%.1f°), limits=[%.2f, %.2f]",
+                  "⚠️ 关节 %s 达到限位！pos=%.3f rad（%.1f°），limits=[%.2f, %.2f]",
                   config.name.c_str(), target_pos, target_pos * 180.0 / M_PI,
                   lower, upper);
     }
     limit_warn_counter_[joint_idx]++;
     if (limit_warn_counter_[joint_idx] % 500 == 0) {
       RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Joint %s still at limit (count=%d)", 
+                  "关节 %s 仍处于限位区（count=%d）",
                   config.name.c_str(), limit_warn_counter_[joint_idx]);
     }
   } else {
@@ -1113,14 +1113,14 @@ bool RsA3HardwareInterface::applyJointLimitProtection(size_t joint_idx, double& 
       joint_at_limit_[joint_idx] = false;
       limit_warn_counter_[joint_idx] = 0;
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "✓ Joint %s left limit zone", config.name.c_str());
+                  "✓ 关节 %s 已离开限位区", config.name.c_str());
     }
   }
   
   return hit_limit;
 }
 
-// ============ Pinocchio 动力学函数实现 ============
+// ============ Pinocchio dynamics function implementation ============
 
 bool RsA3HardwareInterface::initPinocchioModel(const std::string& urdf_path)
 {
@@ -1128,30 +1128,30 @@ bool RsA3HardwareInterface::initPinocchioModel(const std::string& urdf_path)
     // 从 URDF 文件构建模型
     pinocchio::urdf::buildModel(urdf_path, pinocchio_model_);
     
-    // 创建数据对象
+    // 创建 Data 对象
     pinocchio_data_ = pinocchio::Data(pinocchio_model_);
     
     pinocchio_initialized_ = true;
     
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Pinocchio model initialized successfully:");
+                "Pinocchio 模型初始化成功：");
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "  - Model name: %s", pinocchio_model_.name.c_str());
+                "  - 模型名称：%s", pinocchio_model_.name.c_str());
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "  - Number of joints: %d", pinocchio_model_.njoints);
+                "  - 关节数量：%d", pinocchio_model_.njoints);
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "  - Number of DOFs: %d", pinocchio_model_.nv);
+                "  - 自由度数量：%d", pinocchio_model_.nv);
     
-    // 打印关节信息
+    // 输出关节信息
     for (int i = 1; i < pinocchio_model_.njoints; ++i) {
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "  - Joint %d: %s", i, pinocchio_model_.names[i].c_str());
+                  "  - 关节 %d：%s", i, pinocchio_model_.names[i].c_str());
     }
     
     return true;
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                 "Failed to initialize Pinocchio model from %s: %s",
+                 "从 %s 初始化 Pinocchio 模型失败：%s",
                  urdf_path.c_str(), e.what());
     pinocchio_initialized_ = false;
     return false;
@@ -1168,42 +1168,42 @@ std::vector<double> RsA3HardwareInterface::computePinocchioGravity(
   }
   
   try {
-    // 创建位置向量 q（Pinocchio 格式）
-    // 注意：需要根据实际的关节映射来填充
+    // Create position vector q (Pinocchio format)
+    // Note: needs to be filled based on actual joint mapping
     Eigen::VectorXd q = Eigen::VectorXd::Zero(pinocchio_model_.nq);
     
-    // 映射硬件关节到 Pinocchio 模型关节
-    // 假设顺序一致，根据实际 URDF 调整
+    // Map hardware joints to Pinocchio model joints
+    // Assume same order, adjust based on actual URDF
     for (size_t i = 0; i < std::min(positions.size(), static_cast<size_t>(pinocchio_model_.nq)); ++i) {
-      // 应用方向和偏移（反向转换，因为 Pinocchio 使用 URDF 坐标系）
+      // Apply direction and offset (reverse conversion, because Pinocchio uses URDF coordinate frame)
       q[i] = positions[i];
     }
     
-    // 创建零速度和零加速度
+    // Create zero velocity and zero acceleration
     Eigen::VectorXd v = Eigen::VectorXd::Zero(pinocchio_model_.nv);
     Eigen::VectorXd a = Eigen::VectorXd::Zero(pinocchio_model_.nv);
     
-    // 使用 RNEA（递归牛顿-欧拉算法）计算逆动力学
-    // 当 v=0, a=0 时，结果就是重力补偿力矩
+    // Use RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
+    // When v=0, a=0, the result is gravity compensation torque
     Eigen::VectorXd tau = pinocchio::rnea(pinocchio_model_, pinocchio_data_, q, v, a);
     
-    // 将结果映射回硬件关节
+    // Map results back to hardware joints
     for (size_t i = 0; i < std::min(gravity_torques.size(), static_cast<size_t>(tau.size())); ++i) {
-      // 如果使用标定后的惯性参数，跳过缩放因子（已在模型中应用）
-      // 仅当使用 URDF 默认值时才应用缩放因子
+      // If using calibrated inertia parameters, skip scale factor (already applied in model)
+      // Only apply scale factor when using URDF defaults
       double scale = 1.0;
       if (!use_calibrated_inertia_ && i < inertia_scale_params_.size()) {
         scale = inertia_scale_params_[i].mass_scale;
       }
       
-      // 应用关节方向（与硬件接口一致）
+      // Apply joint direction (consistent with hardware interface)
       gravity_torques[i] = tau[i] * scale * joint_configs_[i].direction;
     }
     
   } catch (const std::exception& e) {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger("RsA3HardwareInterface"),
                           *debug_node_->get_clock(), 5000,
-                          "Pinocchio gravity computation error: %s", e.what());
+                          "Pinocchio 重力计算异常：%s", e.what());
   }
   
   return gravity_torques;
@@ -1212,44 +1212,44 @@ std::vector<double> RsA3HardwareInterface::computePinocchioGravity(
 bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path)
 {
   try {
-    // 简单的 YAML 解析（不依赖外部库）
+    // Simple YAML parsing (no external library dependency)
     std::ifstream file(config_path);
     if (!file.is_open()) {
       RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Cannot open inertia config file: %s", config_path.c_str());
+                  "无法打开惯量配置文件：%s", config_path.c_str());
       return false;
     }
     
-    // 初始化参数容器
+    // Initialize parameter container
     calibrated_inertia_params_.resize(6);  // L1-L6
     
-    // 从 Pinocchio 模型读取默认值
+    // Read defaults from Pinocchio model
     for (size_t i = 0; i < 6 && i + 1 < static_cast<size_t>(pinocchio_model_.nbodies); ++i) {
-      const auto& inertia = pinocchio_model_.inertias[i + 1];  // 跳过 universe
+      const auto& inertia = pinocchio_model_.inertias[i + 1];  // Skip universe
       calibrated_inertia_params_[i].mass = inertia.mass();
       calibrated_inertia_params_[i].com_x = inertia.lever()[0];
       calibrated_inertia_params_[i].com_y = inertia.lever()[1];
       calibrated_inertia_params_[i].com_z = inertia.lever()[2];
     }
     
-    // 解析 YAML（简化版，按行解析）
+    // Parse YAML (simplified, line-by-line parsing)
     std::string line;
     std::string current_joint;
     bool in_inertia_params = false;
     bool use_calibrated = false;
     
     while (std::getline(file, line)) {
-      // 跳过空行和注释
+      // Skip blank lines and comments
       size_t pos = line.find_first_not_of(" \t");
       if (pos == std::string::npos || line[pos] == '#') continue;
       
-      // 检查 use_calibrated_params
+      // Check use_calibrated_params
       if (line.find("use_calibrated_params:") != std::string::npos) {
         use_calibrated = (line.find("true") != std::string::npos);
         continue;
       }
       
-      // 检查 inertia_params 节
+      // Check inertia_params section
       if (line.find("inertia_params:") != std::string::npos) {
         in_inertia_params = true;
         continue;
@@ -1257,7 +1257,7 @@ bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path
       
       if (!in_inertia_params) continue;
       
-      // 检查关节名称 (L2:, L3:, etc.)
+      // Check joint name (L2:, L3:, etc.)
       for (int j = 2; j <= 6; ++j) {
         std::string joint_key = "L" + std::to_string(j) + ":";
         if (line.find(joint_key) != std::string::npos && 
@@ -1268,16 +1268,16 @@ bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path
         }
       }
       
-      // 解析 mass
+      // Parse mass
       if (!current_joint.empty() && line.find("mass:") != std::string::npos) {
         size_t colon_pos = line.find("mass:");
         std::string value_str = line.substr(colon_pos + 5);
-        // 去掉注释
+        // Remove comments
         size_t comment_pos = value_str.find('#');
         if (comment_pos != std::string::npos) {
           value_str = value_str.substr(0, comment_pos);
         }
-        // 去掉空格
+        // Remove whitespace
         value_str.erase(std::remove_if(value_str.begin(), value_str.end(), ::isspace), value_str.end());
         
         int joint_idx = std::stoi(current_joint.substr(1)) - 1;
@@ -1286,13 +1286,13 @@ bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path
         }
       }
       
-      // 解析 com
+      // Parse com
       if (!current_joint.empty() && line.find("com:") != std::string::npos) {
         size_t bracket_start = line.find('[');
         size_t bracket_end = line.find(']');
         if (bracket_start != std::string::npos && bracket_end != std::string::npos) {
           std::string com_str = line.substr(bracket_start + 1, bracket_end - bracket_start - 1);
-          // 解析三个值
+          // Parse three values
           std::vector<double> com_values;
           std::stringstream ss(com_str);
           std::string token;
@@ -1317,13 +1317,13 @@ bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path
     
     if (!use_calibrated) {
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "Calibrated inertia disabled in config, using URDF defaults");
+                  "配置中未启用标定惯量：将使用 URDF 默认值");
       return false;
     }
     
-    // 打印加载的参数
+    // 输出加载到的参数
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "Loaded calibrated inertia parameters:");
+                "已加载标定惯量参数：");
     for (size_t i = 1; i < 6; ++i) {  // L2-L6
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
                   "  L%zu: mass=%.4f kg, com=[%.4f, %.4f, %.4f] m",
@@ -1338,7 +1338,7 @@ bool RsA3HardwareInterface::loadCalibratedInertia(const std::string& config_path
     
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
-                 "Failed to load inertia config: %s", e.what());
+                 "加载惯量配置失败：%s", e.what());
     return false;
   }
 }
@@ -1350,30 +1350,30 @@ void RsA3HardwareInterface::applyCalibratedInertiaToModel()
   }
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Applying calibrated inertia to Pinocchio model...");
+              "正在将标定惯量应用到 Pinocchio 模型...");
   
-  // 更新 L2-L6 的惯性参数 (Pinocchio 模型索引从 1 开始，跳过 universe)
+  // Update inertia parameters for L2-L6 (Pinocchio model index starts from 1, skip universe)
   for (size_t i = 1; i < 6 && i + 1 < static_cast<size_t>(pinocchio_model_.nbodies); ++i) {
     const auto& params = calibrated_inertia_params_[i];
     
-    // 更新质量 (mass() 返回引用)
+    // Update mass (mass() returns reference)
     pinocchio_model_.inertias[i + 1].mass() = params.mass;
     
-    // 更新质心位置 (lever() 返回向量引用)
+    // Update center of mass position (lever() returns vector reference)
     pinocchio_model_.inertias[i + 1].lever()[0] = params.com_x;
     pinocchio_model_.inertias[i + 1].lever()[1] = params.com_y;
     pinocchio_model_.inertias[i + 1].lever()[2] = params.com_z;
     
     RCLCPP_DEBUG(rclcpp::get_logger("RsA3HardwareInterface"),
-                 "  Updated L%zu: mass=%.4f, com=[%.4f, %.4f, %.4f]",
+                 "  已更新 L%zu：mass=%.4f，com=[%.4f, %.4f, %.4f]",
                  i + 1, params.mass, params.com_x, params.com_y, params.com_z);
   }
   
-  // 重新创建 Pinocchio Data 对象以应用更改
+  // Recreate Pinocchio Data object to apply changes
   pinocchio_data_ = pinocchio::Data(pinocchio_model_);
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "Pinocchio model updated with calibrated inertia parameters");
+              "Pinocchio 模型已更新（已应用标定惯量参数）");
 }
 
 }  // namespace rs_a3_hardware

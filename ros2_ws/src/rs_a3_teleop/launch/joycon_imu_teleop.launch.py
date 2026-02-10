@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Joy-Con IMU 遥控 Launch 文件
+Joy-Con IMU Teleoperation Launch File
 
-启动方式:
-  仿真模式:
+Launch modes:
+  Simulation mode:
     ros2 launch rs_a3_teleop joycon_imu_teleop.launch.py
 
-  真实硬件:
+  Real hardware:
     ros2 launch rs_a3_teleop joycon_imu_teleop.launch.py use_mock_hardware:=false can_interface:=can0
 """
 
@@ -21,11 +21,11 @@ import os
 
 
 def generate_launch_description():
-    # 获取包路径
+    # Get package paths
     teleop_pkg = FindPackageShare('rs_a3_teleop')
     moveit_pkg = FindPackageShare('rs_a3_moveit_config')
     
-    # 声明启动参数
+    # Declare launch arguments
     use_mock_hardware_arg = DeclareLaunchArgument(
         'use_mock_hardware',
         default_value='true',
@@ -50,19 +50,19 @@ def generate_launch_description():
         description='Enable debug mode'
     )
     
-    # 获取参数
+    # Get arguments
     use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     can_interface = LaunchConfiguration('can_interface')
     joy_device = LaunchConfiguration('joy_device')
     debug = LaunchConfiguration('debug')
     
-    # 配置文件路径
+    # Config file path
     teleop_config = PathJoinSubstitution([
         teleop_pkg, 'config', 'joycon_imu_teleop.yaml'
     ])
     
-    # ==================== 仿真模式 ====================
-    # 启动 MoveIt demo (包含 mock 硬件)
+    # ==================== Simulation mode ====================
+    # Start MoveIt demo (includes mock hardware)
     moveit_demo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([moveit_pkg, 'launch', 'demo.launch.py'])
@@ -70,8 +70,8 @@ def generate_launch_description():
         condition=IfCondition(use_mock_hardware)
     )
     
-    # ==================== 真实硬件模式 ====================
-    # 启动真实硬件 MoveIt
+    # ==================== Real hardware mode ====================
+    # Start real hardware MoveIt
     moveit_real_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([moveit_pkg, 'launch', 'robot.launch.py'])
@@ -82,8 +82,8 @@ def generate_launch_description():
         condition=UnlessCondition(use_mock_hardware)
     )
     
-    # ==================== Joy 节点 ====================
-    # 发布手柄按键数据
+    # ==================== Joy node ====================
+    # Publish controller button data
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -98,8 +98,8 @@ def generate_launch_description():
         ],
     )
     
-    # ==================== Joy-Con IMU 驱动节点 ====================
-    # 读取 Joy-Con IMU 数据并发布为 sensor_msgs/Imu
+    # ==================== Joy-Con IMU driver node ====================
+    # Read Joy-Con IMU data and publish as sensor_msgs/Imu
     joycon_imu_driver_node = Node(
         package='rs_a3_teleop',
         executable='joycon_imu_driver',
@@ -111,7 +111,7 @@ def generate_launch_description():
         output='screen',
     )
     
-    # ==================== IMU 遥控节点 ====================
+    # ==================== IMU teleoperation node ====================
     joycon_imu_teleop_node = Node(
         package='rs_a3_teleop',
         executable='joycon_imu_teleop',
@@ -121,20 +121,20 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        # 参数声明
+        # Argument declarations
         use_mock_hardware_arg,
         can_interface_arg,
         joy_device_arg,
         debug_arg,
         
-        # MoveIt 启动
+        # MoveIt launch
         moveit_demo_launch,
         moveit_real_launch,
         
-        # Joy-Con 节点
+        # Joy-Con nodes
         joy_node,
         joycon_imu_driver_node,
         
-        # 遥控节点
+        # Teleoperation node
         joycon_imu_teleop_node,
     ])

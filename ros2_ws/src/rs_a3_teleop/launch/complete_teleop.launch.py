@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-完整的Xbox手柄控制启动文件
-包含机器人、MoveIt、Servo和手柄控制的一体化启动
+Complete Xbox Controller Launch File
+Integrated launch for robot, MoveIt, Servo and controller
 
-使用方法：
-  # 仿真模式
+Usage:
+  # Simulation mode
   ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
   
-  # 真实硬件模式
+  # Real hardware mode
   ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
 """
 
@@ -21,7 +21,7 @@ from launch.conditions import IfCondition
 
 
 def generate_launch_description():
-    # 声明启动参数
+    # Declare launch arguments
     use_mock_hardware_arg = DeclareLaunchArgument(
         'use_mock_hardware',
         default_value='false',
@@ -40,7 +40,7 @@ def generate_launch_description():
         description='Joystick device path'
     )
     
-    # 包含MoveIt启动文件
+    # Include MoveIt launch file
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -55,7 +55,7 @@ def generate_launch_description():
         }.items()
     )
     
-    # MoveIt Servo节点
+    # MoveIt Servo node
     servo_node = Node(
         package='moveit_servo',
         executable='servo_node',
@@ -70,7 +70,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Joy节点
+    # Joy node
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -83,7 +83,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Xbox Servo Teleop节点
+    # Xbox Servo Teleop node
     xbox_servo_teleop_node = Node(
         package='rs_a3_teleop',
         executable='xbox_servo_teleop_node',

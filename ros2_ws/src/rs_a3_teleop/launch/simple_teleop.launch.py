@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-简化的Xbox手柄控制启动文件（不需要MoveIt Servo）
-使用MoveGroup规划器进行控制
+Simplified Xbox Controller Launch File (no MoveIt Servo required)
+Uses MoveGroup planner for control
 """
 
 from launch import LaunchDescription
@@ -13,7 +13,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 声明启动参数
+    # Declare launch arguments
     use_mock_hardware_arg = DeclareLaunchArgument(
         'use_mock_hardware',
         default_value='true',
@@ -26,7 +26,7 @@ def generate_launch_description():
         description='Joystick device path'
     )
     
-    # 包含MoveIt启动文件（包含robot和RViz）
+    # Include MoveIt launch file (includes robot and RViz)
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -37,7 +37,7 @@ def generate_launch_description():
         ])
     )
     
-    # Joy节点
+    # Joy node
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -50,7 +50,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Xbox Teleop节点（使用MoveGroup版本）
+    # Xbox Teleop node (MoveGroup version)
     xbox_teleop_node = Node(
         package='rs_a3_teleop',
         executable='xbox_teleop_node',

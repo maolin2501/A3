@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ROS2 Bridge Node for RS-A3 Web UI.
-Handles communication between ROS2 and WebSocket.
+RS-A3 Web UI 的 ROS2 桥接节点。
+负责在 ROS2 与 WebSocket 之间进行通信。
 """
 
 import threading
@@ -23,7 +23,7 @@ from builtin_interfaces.msg import Duration
 
 
 class ROS2Bridge(Node):
-    """ROS2 Bridge node for web interface."""
+    """Web 界面的 ROS2 桥接节点。"""
 
     # Joint names in order
     JOINT_NAMES = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
@@ -124,15 +124,15 @@ class ROS2Bridge(Node):
         self.get_logger().info('ROS2 Bridge initialized')
 
     def set_state_callback(self, callback: Callable):
-        """Set callback for state updates."""
+        """设置状态更新回调。"""
         self._state_callback = callback
 
     def set_log_callback(self, callback: Callable):
-        """Set callback for log messages."""
+        """设置日志回调。"""
         self._log_callback = callback
 
     def _log(self, message: str, level: str = 'info'):
-        """Log message and send to callback."""
+        """记录日志并转发给回调。"""
         if level == 'info':
             self.get_logger().info(message)
         elif level == 'warn':
@@ -148,7 +148,7 @@ class ROS2Bridge(Node):
             })
 
     def _joint_state_callback(self, msg: JointState):
-        """Handle joint state messages."""
+        """处理关节状态消息。"""
         with self._lock:
             self._last_update_time = time.time()
             self._system_status = 'connected'
@@ -167,16 +167,16 @@ class ROS2Bridge(Node):
             self._state_callback(self.get_state())
 
     def _gravity_torque_callback(self, msg: JointState):
-        """Handle gravity torque messages."""
+        """处理重力补偿力矩消息。"""
         with self._lock:
             for i, name in enumerate(msg.name):
                 if name in self._gravity_torques and i < len(msg.effort):
                     self._gravity_torques[name] = msg.effort[i]
 
     def _temperature_callback(self, msg: JointState):
-        """Handle motor temperature messages.
+        """处理电机温度消息。
         
-        Note: Temperature is published in the effort field of JointState message.
+        注意：温度通过 JointState 的 effort 字段发布。
         """
         with self._lock:
             for i, name in enumerate(msg.name):
@@ -184,19 +184,19 @@ class ROS2Bridge(Node):
                     self._motor_temperatures[name] = msg.effort[i]
 
     def _check_status(self):
-        """Check system connection status."""
+        """检查系统连接状态。"""
         with self._lock:
             if time.time() - self._last_update_time > 3.0:
                 if self._system_status != 'disconnected':
                     self._system_status = 'disconnected'
-                    self._log('Lost connection to robot', 'warn')
+                    self._log('与机器人连接已断开', 'warn')
             else:
                 if self._system_status != 'connected':
                     self._system_status = 'connected'
-                    self._log('Connected to robot', 'info')
+                    self._log('已连接到机器人', 'info')
 
     def get_state(self) -> Dict:
-        """Get current robot state."""
+        """获取当前机器人状态。"""
         with self._lock:
             joints = []
             for name in self.JOINT_NAMES:
@@ -223,17 +223,17 @@ class ROS2Bridge(Node):
             }
 
     def send_joint_command(self, positions: List[float], duration: float = 2.0) -> bool:
-        """Send joint position command.
+        """发送关节位置指令。
         
         Args:
-            positions: List of 6 joint positions in radians
-            duration: Time to reach the position in seconds
+            positions: 6 个关节角（弧度）
+            duration: 到达目标所需时间（秒）
         
         Returns:
-            True if command was sent successfully
+            指令发送成功返回 True
         """
         if len(positions) != 6:
-            self._log(f'Invalid position count: {len(positions)}, expected 6', 'error')
+            self._log(f'关节数量非法：{len(positions)}，期望 6', 'error')
             return False
         
         # Clamp positions to limits
@@ -242,7 +242,7 @@ class ROS2Bridge(Node):
             limits = self.JOINT_LIMITS[name]
             clamped = max(limits['lower'], min(limits['upper'], pos))
             if clamped != pos:
-                self._log(f'{name} clamped from {math.degrees(pos):.1f}° to {math.degrees(clamped):.1f}°', 'warn')
+                self._log(f'{name} 超出限位：{math.degrees(pos):.1f}° -> {math.degrees(clamped):.1f}°（已夹紧）', 'warn')
             clamped_positions.append(clamped)
         
         # Create trajectory message
@@ -257,12 +257,12 @@ class ROS2Bridge(Node):
         traj.points.append(point)
         
         self.trajectory_pub.publish(traj)
-        self._log(f'Sent trajectory command (duration: {duration:.1f}s)', 'info')
+        self._log(f'已发送轨迹指令（时长：{duration:.1f}s）', 'info')
         
         return True
 
     def send_single_joint_command(self, joint_index: int, position: float, duration: float = 1.0) -> bool:
-        """Send command for a single joint while keeping others at current position.
+        """单关节控制：其他关节保持当前角度。
         
         Args:
             joint_index: Index of joint (0-5)
@@ -270,10 +270,10 @@ class ROS2Bridge(Node):
             duration: Time to reach the position
         
         Returns:
-            True if command was sent successfully
+            指令发送成功返回 True
         """
         if not 0 <= joint_index < 6:
-            self._log(f'Invalid joint index: {joint_index}', 'error')
+            self._log(f'关节索引非法：{joint_index}', 'error')
             return False
         
         with self._lock:
@@ -283,12 +283,12 @@ class ROS2Bridge(Node):
         return self.send_joint_command(positions, duration)
 
     def go_home(self, duration: float = 3.0) -> bool:
-        """Send robot to home position (all zeros)."""
-        self._log('Going to home position', 'info')
+        """回到 home（全零位）。"""
+        self._log('正在回到 home（全零位）', 'info')
         return self.send_joint_command([0.0] * 6, duration)
 
     def _call_service_cli(self, service_name: str, data: bool) -> bool:
-        """Call a SetBool service using ros2 cli to avoid threading issues."""
+        """使用 ros2 CLI 调用 SetBool 服务，避免线程问题。"""
         try:
             cmd = [
                 'ros2', 'service', 'call',
@@ -310,33 +310,33 @@ class ROS2Bridge(Node):
                 return 'success' in result.stdout.lower()
             return False
         except subprocess.TimeoutExpired:
-            self._log(f'Service {service_name} call timeout', 'error')
+            self._log(f'服务调用超时：{service_name}', 'error')
             return False
         except Exception as e:
-            self._log(f'Service call error: {e}', 'error')
+            self._log(f'服务调用异常：{e}', 'error')
             return False
 
     def set_zero_torque_mode(self, enable: bool) -> bool:
-        """Enable or disable zero torque mode.
+        """开启/关闭零力矩模式。
         
         Args:
-            enable: True to enable zero torque mode
+            enable: True 表示开启零力矩模式
         
         Returns:
-            True if successful
+            成功返回 True
         """
         success = self._call_service_cli('/rs_a3/set_zero_torque_mode', enable)
         
         if success:
-            self._log(f'Zero torque mode: {"enabled" if enable else "disabled"}', 'info')
+            self._log(f'零力矩模式：{"已开启" if enable else "已关闭"}', 'info')
         else:
-            self._log('Failed to set zero torque mode', 'error')
+            self._log('设置零力矩模式失败', 'error')
         
         return success
 
     def emergency_stop(self):
-        """Emergency stop - send current position as command."""
-        self._log('EMERGENCY STOP', 'warn')
+        """急停：发送当前位置保持指令。"""
+        self._log('急停（EMERGENCY STOP）', 'warn')
         with self._lock:
             positions = [self._joint_states[name]['position'] for name in self.JOINT_NAMES]
         
@@ -358,7 +358,7 @@ class ROS2Bridge(Node):
     # Disable motors = Enable zero torque mode (free movement)
     
     def enable_motors(self) -> bool:
-        """Enable all motors (disable zero torque mode).
+        """使能所有电机（关闭零力矩模式）。
         
         Returns:
             True if successful
@@ -367,14 +367,14 @@ class ROS2Bridge(Node):
         
         if success:
             self._motors_enabled = True
-            self._log('Motors enabled (position control active)', 'info')
+            self._log('电机已使能（位置控制生效）', 'info')
         else:
-            self._log('Failed to enable motors', 'error')
+            self._log('电机使能失败', 'error')
         
         return success
 
     def disable_motors(self) -> bool:
-        """Disable all motors (enable zero torque mode for free movement).
+        """失能所有电机（开启零力矩模式以便自由拖动）。
         
         Returns:
             True if successful
@@ -383,38 +383,38 @@ class ROS2Bridge(Node):
         
         if success:
             self._motors_enabled = False
-            self._log('Motors disabled (zero torque mode)', 'info')
+            self._log('电机已失能（零力矩模式）', 'info')
         else:
-            self._log('Failed to disable motors', 'error')
+            self._log('电机失能失败', 'error')
         
         return success
 
     def get_motors_enabled(self) -> bool:
-        """Get motor enable state."""
+        """获取电机使能状态。"""
         return self._motors_enabled
 
     # ==================== Teleop Control ====================
     
     def _check_teleop_process(self):
-        """Check teleop process status periodically."""
+        """周期性检查 teleop 进程状态。"""
         if self._teleop_process is not None:
             poll = self._teleop_process.poll()
             if poll is not None:
                 # Process has terminated
                 self._teleop_status = 'stopped'
                 self._teleop_process = None
-                self._log('Teleop process terminated', 'info')
+                self._log('Teleop 进程已退出', 'info')
 
     def start_teleop(self) -> bool:
-        """Start xbox teleop node.
+        """启动 Xbox 遥操作节点。
         
         Returns:
-            True if started successfully
+            启动成功返回 True
         """
         if self._teleop_process is not None:
             poll = self._teleop_process.poll()
             if poll is None:
-                self._log('Teleop already running', 'warn')
+                self._log('Teleop 已在运行', 'warn')
                 return True
         
         try:
@@ -433,19 +433,19 @@ class ROS2Bridge(Node):
             )
             
             self._teleop_status = 'running'
-            self._log('Teleop started', 'info')
+            self._log('Teleop 已启动', 'info')
             return True
             
         except Exception as e:
-            self._log(f'Failed to start teleop: {e}', 'error')
+            self._log(f'启动 Teleop 失败：{e}', 'error')
             self._teleop_status = 'error'
             return False
 
     def stop_teleop(self) -> bool:
-        """Stop xbox teleop node.
+        """停止 Xbox 遥操作节点。
         
         Returns:
-            True if stopped successfully
+            停止成功返回 True
         """
         if self._teleop_process is None:
             self._teleop_status = 'stopped'
@@ -465,20 +465,20 @@ class ROS2Bridge(Node):
             
             self._teleop_process = None
             self._teleop_status = 'stopped'
-            self._log('Teleop stopped', 'info')
+            self._log('Teleop 已停止', 'info')
             return True
             
         except Exception as e:
-            self._log(f'Failed to stop teleop: {e}', 'error')
+            self._log(f'停止 Teleop 失败：{e}', 'error')
             self._teleop_process = None
             self._teleop_status = 'error'
             return False
 
     def get_teleop_status(self) -> str:
-        """Get teleop node status.
+        """获取 teleop 节点状态。
         
         Returns:
-            Status string: 'running', 'stopped', or 'error'
+            状态字符串：'running' / 'stopped' / 'error'
         """
         if self._teleop_process is not None:
             poll = self._teleop_process.poll()
@@ -489,35 +489,35 @@ class ROS2Bridge(Node):
     # ==================== CAN Interface Configuration ====================
     
     def get_can_interface(self) -> str:
-        """Get current CAN interface name."""
+        """获取当前 CAN 接口名。"""
         return self._current_can_interface
 
     def set_can_interface(self, interface: str) -> bool:
-        """Set CAN interface.
+        """设置 CAN 接口。
         
-        Note: This requires restarting the hardware driver to take effect.
+        注意：该配置需要重启硬件驱动才能生效。
         
         Args:
-            interface: CAN interface name (e.g., 'can0', 'can1')
+            interface: CAN 接口名（例如 'can0' / 'can1'）
         
         Returns:
-            True if configuration saved (actual switch requires restart)
+            配置保存成功返回 True（实际切换需要重启）
         """
         # Validate interface name
         if not interface.startswith('can'):
-            self._log(f'Invalid CAN interface name: {interface}', 'error')
+            self._log(f'CAN 接口名非法：{interface}', 'error')
             return False
         
         self._current_can_interface = interface
-        self._log(f'CAN interface set to {interface} (requires restart)', 'info')
+        self._log(f'CAN 接口已设置为 {interface}（需重启生效）', 'info')
         return True
 
     @staticmethod
     def get_available_can_interfaces() -> List[str]:
-        """Get list of available CAN interfaces on the system.
+        """获取系统中可用的 CAN 接口列表。
         
         Returns:
-            List of CAN interface names
+            CAN 接口名列表
         """
         interfaces = []
         try:
@@ -547,7 +547,7 @@ class ROS2Bridge(Node):
 
 
 class ROS2BridgeThread:
-    """Thread wrapper for ROS2 Bridge node."""
+    """ROS2Bridge 的线程封装。"""
     
     def __init__(self):
         self.node: Optional[ROS2Bridge] = None
@@ -556,7 +556,7 @@ class ROS2BridgeThread:
         self._running = False
 
     def start(self):
-        """Start the ROS2 bridge in a background thread."""
+        """在后台线程启动 ROS2 bridge。"""
         if self._running:
             return
         
@@ -571,10 +571,10 @@ class ROS2BridgeThread:
             time.sleep(0.1)
         
         if self.node is None:
-            raise RuntimeError('Failed to start ROS2 bridge')
+            raise RuntimeError('启动 ROS2 bridge 失败')
 
     def _run(self):
-        """Run the ROS2 node."""
+        """运行 ROS2 节点。"""
         try:
             rclpy.init()
             self.node = ROS2Bridge()
@@ -584,7 +584,7 @@ class ROS2BridgeThread:
             while self._running:
                 self._executor.spin_once(timeout_sec=0.1)
         except Exception as e:
-            print(f'ROS2 Bridge error: {e}')
+            print(f'ROS2 Bridge 异常：{e}')
         finally:
             if self.node:
                 self.node.destroy_node()
@@ -592,7 +592,7 @@ class ROS2BridgeThread:
                 rclpy.shutdown()
 
     def stop(self):
-        """Stop the ROS2 bridge."""
+        """停止 ROS2 bridge。"""
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
@@ -604,7 +604,7 @@ _bridge_thread: Optional[ROS2BridgeThread] = None
 
 
 def get_bridge() -> ROS2Bridge:
-    """Get or create the ROS2 bridge instance."""
+    """获取或创建 ROS2 bridge 单例。"""
     global _bridge_thread
     
     if _bridge_thread is None:
@@ -615,7 +615,7 @@ def get_bridge() -> ROS2Bridge:
 
 
 def shutdown_bridge():
-    """Shutdown the ROS2 bridge."""
+    """关闭 ROS2 bridge。"""
     global _bridge_thread
     
     if _bridge_thread:

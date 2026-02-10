@@ -1,7 +1,7 @@
 """
 RS-A3 Robot Arm MoveIt Real Hardware Launch File
 
-启动MoveIt运动规划与真实硬件控制
+Launches MoveIt motion planning with real hardware control
 """
 
 import os
@@ -12,6 +12,7 @@ from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 import yaml
 
@@ -73,7 +74,7 @@ def generate_launch_description():
             host_can_id,
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # SRDF
     robot_description_semantic_content = Command(
@@ -84,7 +85,7 @@ def generate_launch_description():
             ),
         ]
     )
-    robot_description_semantic = {"robot_description_semantic": robot_description_semantic_content}
+    robot_description_semantic = {"robot_description_semantic": ParameterValue(robot_description_semantic_content, value_type=str)}
 
     # Kinematics
     kinematics_yaml = load_yaml("rs_a3_moveit_config", "config/kinematics.yaml")
@@ -100,11 +101,11 @@ def generate_launch_description():
     # Controllers
     moveit_controllers_yaml = load_yaml("rs_a3_moveit_config", "config/moveit_controllers.yaml")
 
-    # Trajectory execution - 增加超时容限以支持快速遥控
+    # Trajectory execution - increased timeout tolerance to support fast teleoperation
     trajectory_execution = {
         "moveit_manage_controllers": False,  # Let ros2_control manage controllers
-        "trajectory_execution.allowed_execution_duration_scaling": 4.0,  # 增加到4倍允许更宽松的执行时间
-        "trajectory_execution.allowed_goal_duration_margin": 2.0,  # 增加目标持续时间容限
+        "trajectory_execution.allowed_execution_duration_scaling": 4.0,  # Increased to 4x for more lenient execution time
+        "trajectory_execution.allowed_goal_duration_margin": 2.0,  # Increased goal duration margin
         "trajectory_execution.allowed_start_tolerance": 0.1,
     }
 

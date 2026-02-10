@@ -1,20 +1,20 @@
 /**
  * @file s_curve_generator.hpp
- * @brief Standard 7-segment S-curve trajectory generator for smooth motion control
+ * @brief 标准 7 段式 S 曲线轨迹生成器（用于平滑运动控制）
  * 
- * Implements a standard 7-segment S-curve velocity profile:
- * 1. Jerk-up (acceleration increasing)
- * 2. Constant acceleration
- * 3. Jerk-down (acceleration decreasing to 0)
- * 4. Constant velocity (cruise)
- * 5. Jerk-down (deceleration increasing)
- * 6. Constant deceleration
- * 7. Jerk-up (deceleration decreasing to 0)
+ * 实现标准 7 段式 S 曲线速度剖面：
+ * 1. 加加速度上升段（加速度逐渐增大）
+ * 2. 匀加速段
+ * 3. 加加速度下降段（加速度逐渐降到 0）
+ * 4. 匀速巡航段
+ * 5. 加加速度下降段（减速度逐渐增大）
+ * 6. 匀减速段
+ * 7. 加加速度上升段（减速度逐渐降到 0）
  * 
- * Features:
- * - Real-time incremental update for joystick control
- * - Full trajectory generation for MoveIt path re-parameterization
- * - Configurable max_velocity, max_acceleration, max_jerk
+ * 特性：
+ * - 支持摇杆等实时增量更新
+ * - 支持生成完整轨迹（用于 MoveIt 路径再参数化）
+ * - 支持配置 max_velocity / max_acceleration / max_jerk
  */
 
 #ifndef RS_A3_HARDWARE__S_CURVE_GENERATOR_HPP_
@@ -28,36 +28,36 @@ namespace rs_a3_hardware
 {
 
 /**
- * @brief S-curve motion profile for a single segment
+ * @brief 单次点到点运动的 S 曲线剖面参数
  */
 struct SCurveProfile
 {
-  // Time durations for each of the 7 segments
-  double t1;  // Jerk-up time (acceleration phase)
-  double t2;  // Constant acceleration time
-  double t3;  // Jerk-down time (end of acceleration phase)
-  double t4;  // Constant velocity (cruise) time
-  double t5;  // Jerk-down time (deceleration phase)
-  double t6;  // Constant deceleration time
-  double t7;  // Jerk-up time (end of deceleration phase)
+  // 7 个阶段的持续时间
+  double t1;  // 加加速度上升时间（加速阶段）
+  double t2;  // 匀加速时间
+  double t3;  // 加加速度下降时间（加速阶段结束）
+  double t4;  // 匀速时间（巡航）
+  double t5;  // 加加速度下降时间（减速阶段）
+  double t6;  // 匀减速时间
+  double t7;  // 加加速度上升时间（减速阶段结束）
   
   double total_time;
   
-  // Motion constraints
-  double j_max;   // Maximum jerk (rad/s³)
-  double a_max;   // Maximum acceleration (rad/s²)
-  double v_max;   // Maximum velocity (rad/s)
+  // 运动约束
+  double j_max;   // 最大加加速度 (rad/s³)
+  double a_max;   // 最大加速度 (rad/s²)
+  double v_max;   // 最大速度 (rad/s)
   
-  // Motion parameters
-  double distance;      // Total distance to travel
-  double direction;     // +1 or -1
-  double v_cruise;      // Actual cruise velocity achieved
-  double a_limit;       // Actual acceleration limit achieved
+  // 运动参数
+  double distance;      // 运动总距离
+  double direction;     // +1 或 -1
+  double v_cruise;      // 实际达到的巡航速度
+  double a_limit;       // 实际达到的加速度上限
   
-  // Initial conditions
-  double p0;  // Initial position
-  double v0;  // Initial velocity
-  double a0;  // Initial acceleration
+  // 初始条件
+  double p0;  // 初始位置
+  double v0;  // 初始速度
+  double a0;  // 初始加速度
   
   SCurveProfile()
     : t1(0), t2(0), t3(0), t4(0), t5(0), t6(0), t7(0)
@@ -69,7 +69,7 @@ struct SCurveProfile
 };
 
 /**
- * @brief Real-time state for incremental S-curve control
+ * @brief 实时增量 S 曲线控制的状态量
  */
 struct SCurveState
 {
@@ -78,7 +78,7 @@ struct SCurveState
   double acceleration;
   double jerk;
   
-  // Target tracking
+  // 目标跟踪
   double target_position;
   bool is_moving;
   
@@ -89,139 +89,139 @@ struct SCurveState
 };
 
 /**
- * @brief S-curve trajectory generator
+ * @brief S 曲线轨迹生成器
  * 
- * Provides two modes of operation:
- * 1. Real-time mode: Continuously updates position based on target changes
- * 2. Trajectory mode: Generates complete trajectory for a given displacement
+ * 提供两种工作模式：
+ * 1. 实时模式：根据目标变化持续更新位置
+ * 2. 轨迹模式：针对给定位移生成完整轨迹
  */
 class SCurveGenerator
 {
 public:
   /**
-   * @brief Constructor with motion constraints
-   * @param max_velocity Maximum velocity (rad/s)
-   * @param max_acceleration Maximum acceleration (rad/s²)
-   * @param max_jerk Maximum jerk (rad/s³)
+   * @brief 构造函数（带运动约束）
+   * @param max_velocity 最大速度 (rad/s)
+   * @param max_acceleration 最大加速度 (rad/s²)
+   * @param max_jerk 最大加加速度 (rad/s³)
    */
   SCurveGenerator(double max_velocity = 3.0, 
                   double max_acceleration = 10.0, 
                   double max_jerk = 50.0);
   
   /**
-   * @brief Set motion constraints
+   * @brief 设置运动约束
    */
   void setConstraints(double max_velocity, double max_acceleration, double max_jerk);
   
   /**
-   * @brief Get current constraints
+   * @brief 获取当前运动约束
    */
   void getConstraints(double& max_velocity, double& max_acceleration, double& max_jerk) const;
   
   /**
-   * @brief Initialize the generator with current state
-   * @param position Current position
-   * @param velocity Current velocity (default 0)
-   * @param acceleration Current acceleration (default 0)
+   * @brief 使用当前状态初始化生成器
+   * @param position 当前位置
+   * @param velocity 当前速度（默认 0）
+   * @param acceleration 当前加速度（默认 0）
    */
   void initialize(double position, double velocity = 0.0, double acceleration = 0.0);
   
   /**
-   * @brief Reset to initial state
+   * @brief 重置为初始状态
    */
   void reset();
   
-  // ==================== Real-time Mode ====================
+  // ==================== 实时模式 ====================
   
   /**
-   * @brief Update target position (real-time mode)
-   * @param target_position New target position
+   * @brief 更新目标位置（实时模式）
+   * @param target_position 新目标位置
    */
   void setTarget(double target_position);
   
   /**
-   * @brief Compute next position using S-curve profile (real-time mode)
-   * @param dt Time step (seconds)
-   * @return Updated position
+   * @brief 使用 S 曲线剖面计算下一步位置（实时模式）
+   * @param dt 时间步长（秒）
+   * @return 更新后的位置
    * 
-   * This method implements real-time S-curve control by:
-   * 1. Computing desired velocity based on position error
-   * 2. Limiting acceleration change (jerk limiting)
-   * 3. Limiting acceleration
-   * 4. Limiting velocity
-   * 5. Integrating to get new position
+   * 本方法通过以下步骤实现实时 S 曲线控制：
+   * 1. 根据位置误差计算期望速度
+   * 2. 限制加速度变化（加加速度限制）
+   * 3. 限制加速度
+   * 4. 限制速度
+   * 5. 积分得到新的位置
    */
   double update(double dt);
   
   /**
-   * @brief Get current state
+   * @brief 获取当前状态
    */
   const SCurveState& getState() const { return state_; }
   
   /**
-   * @brief Get current position
+   * @brief 获取当前位置
    */
   double getPosition() const { return state_.position; }
   
   /**
-   * @brief Get current velocity
+   * @brief 获取当前速度
    */
   double getVelocity() const { return state_.velocity; }
   
   /**
-   * @brief Get current acceleration
+   * @brief 获取当前加速度
    */
   double getAcceleration() const { return state_.acceleration; }
   
   /**
-   * @brief Check if currently moving
+   * @brief 是否处于运动状态
    */
   bool isMoving() const { return state_.is_moving; }
   
-  // ==================== Trajectory Mode ====================
+  // ==================== 轨迹模式 ====================
   
   /**
-   * @brief Calculate complete S-curve profile for point-to-point motion
-   * @param start_position Starting position
-   * @param end_position Ending position
-   * @param start_velocity Initial velocity (default 0)
-   * @param end_velocity Final velocity (default 0)
-   * @return Calculated profile
+   * @brief 计算点到点运动的完整 S 曲线剖面
+   * @param start_position 起始位置
+   * @param end_position 终止位置
+   * @param start_velocity 起始速度（默认 0）
+   * @param end_velocity 终止速度（默认 0）
+   * @return 计算得到的剖面参数
    */
   SCurveProfile calculateProfile(double start_position, double end_position,
                                   double start_velocity = 0.0, double end_velocity = 0.0);
   
   /**
-   * @brief Get position at time t for a given profile
-   * @param profile The S-curve profile
-   * @param t Time from start
-   * @return Position at time t
+   * @brief 给定剖面下，获取时刻 t 的位置
+   * @param profile S 曲线剖面
+   * @param t 从起点开始的时间
+   * @return 时刻 t 的位置
    */
   double getPositionAtTime(const SCurveProfile& profile, double t) const;
   
   /**
-   * @brief Get velocity at time t for a given profile
-   * @param profile The S-curve profile
-   * @param t Time from start
-   * @return Velocity at time t
+   * @brief 给定剖面下，获取时刻 t 的速度
+   * @param profile S 曲线剖面
+   * @param t 从起点开始的时间
+   * @return 时刻 t 的速度
    */
   double getVelocityAtTime(const SCurveProfile& profile, double t) const;
   
   /**
-   * @brief Get acceleration at time t for a given profile
-   * @param profile The S-curve profile
-   * @param t Time from start
-   * @return Acceleration at time t
+   * @brief 给定剖面下，获取时刻 t 的加速度
+   * @param profile S 曲线剖面
+   * @param t 从起点开始的时间
+   * @return 时刻 t 的加速度
    */
   double getAccelerationAtTime(const SCurveProfile& profile, double t) const;
   
   /**
-   * @brief Generate trajectory points at regular intervals
-   * @param profile The S-curve profile
-   * @param dt Time step between points
-   * @param positions Output: position at each time step
-   * @param velocities Output: velocity at each time step
-   * @param accelerations Output: acceleration at each time step
+   * @brief 按固定时间间隔生成轨迹点
+   * @param profile S 曲线剖面
+   * @param dt 轨迹点时间间隔
+   * @param positions 输出：每个时间点的位置
+   * @param velocities 输出：每个时间点的速度
+   * @param accelerations 输出：每个时间点的加速度
    */
   void generateTrajectory(const SCurveProfile& profile, double dt,
                           std::vector<double>& positions,
@@ -229,54 +229,54 @@ public:
                           std::vector<double>& accelerations) const;
 
 private:
-  // Motion constraints
+  // 运动约束
   double max_velocity_;
   double max_acceleration_;
   double max_jerk_;
   
-  // Real-time state
+  // 实时状态
   SCurveState state_;
   
-  // Position tracking gain for real-time mode
+  // 实时模式的位置跟踪增益
   double position_gain_;
   
-  // Small value threshold
+  // 小量阈值
   static constexpr double EPSILON = 1e-9;
   static constexpr double VELOCITY_THRESHOLD = 1e-6;
   static constexpr double POSITION_THRESHOLD = 1e-7;
   
   /**
-   * @brief Calculate time to reach zero velocity with max deceleration
+   * @brief 在最大减速度约束下，计算减速到 0 的时间
    */
   double calculateStoppingTime(double velocity, double acceleration) const;
   
   /**
-   * @brief Calculate stopping distance with S-curve deceleration
+   * @brief 按 S 曲线减速剖面计算制动距离
    */
   double calculateStoppingDistance(double velocity, double acceleration) const;
   
   /**
-   * @brief Compute jerk-limited acceleration update
+   * @brief 计算带加加速度限制的加速度更新
    */
   double computeJerkLimitedAcceleration(double current_acc, double desired_acc, double dt) const;
   
   /**
-   * @brief Determine which segment we're in and compute jerk
+   * @brief 判断所处的段并计算对应加加速度
    */
   double computeSegmentJerk(const SCurveProfile& profile, double t) const;
   
   /**
-   * @brief Calculate profile for short distance (may not reach max velocity)
+   * @brief 计算短距离剖面（可能达不到最大速度）
    */
   void calculateShortProfile(SCurveProfile& profile) const;
   
   /**
-   * @brief Calculate profile for long distance (reaches max velocity)
+   * @brief 计算长距离剖面（可达到最大速度）
    */
   void calculateLongProfile(SCurveProfile& profile) const;
   
   /**
-   * @brief Clamp value to range
+   * @brief 将数值夹紧到指定范围
    */
   static double clamp(double value, double min_val, double max_val)
   {
@@ -284,7 +284,7 @@ private:
   }
   
   /**
-   * @brief Sign function
+   * @brief 符号函数
    */
   static double sign(double value)
   {

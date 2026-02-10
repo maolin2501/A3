@@ -1,101 +1,100 @@
 #!/bin/bash
-# 启动Xbox手柄控制的一键脚本
+# One-click Xbox controller launch script
 
 echo "========================================"
-echo "   启动Xbox手柄控制系统"
+echo "   Launching Xbox Controller System"
 echo "========================================"
 echo ""
 
-# 颜色定义
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 进入工作空间
+# Enter workspace
 cd /home/wy/RS/A3/ros2_ws
 
-# Source环境
-echo -e "${BLUE}设置ROS2环境...${NC}"
+# Source environment
+echo -e "${BLUE}Setting up ROS2 environment...${NC}"
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-echo -e "${GREEN}✓${NC} 环境已设置"
+echo -e "${GREEN}✓${NC} Environment set up"
 echo ""
 
-# 检查手柄连接
-echo -e "${BLUE}检查手柄连接...${NC}"
+# Check controller connection
+echo -e "${BLUE}Checking controller connection...${NC}"
 
 if [ -e /dev/input/js0 ]; then
-    echo -e "${GREEN}✓${NC} 找到手柄设备: /dev/input/js0"
+    echo -e "${GREEN}✓${NC} Found controller device: /dev/input/js0"
     DEVICE_PARAM="device_name:=/dev/input/js0"
     echo ""
 elif [ -e /dev/input/js1 ]; then
-    echo -e "${GREEN}✓${NC} 找到手柄设备: /dev/input/js1"
+    echo -e "${GREEN}✓${NC} Found controller device: /dev/input/js1"
     DEVICE_PARAM="device_name:=/dev/input/js1"
     echo ""
 else
-    echo -e "${YELLOW}!${NC} 未找到/dev/input/js设备"
-    echo "尝试查找event设备..."
+    echo -e "${YELLOW}!${NC} No /dev/input/js device found"
+    echo "Trying to find event device..."
     
-    # 查找Xbox event设备
+    # Find Xbox event device
     XBOX_EVENT=$(ls -t /dev/input/event* | head -1)
     if [ -n "$XBOX_EVENT" ]; then
-        echo -e "${GREEN}✓${NC} 使用event设备: $XBOX_EVENT"
+        echo -e "${GREEN}✓${NC} Using event device: $XBOX_EVENT"
         DEVICE_PARAM="device_name:=$XBOX_EVENT"
         echo ""
     else
-        echo -e "${RED}✗${NC} 未找到任何输入设备"
+        echo -e "${RED}✗${NC} No input device found"
         echo ""
-        echo "请执行以下操作："
-        echo "1. 确保Xbox手柄已连接（查看蓝牙设置）"
-        echo "2. 按下手柄上的任意按钮激活它"
-        echo "3. 运行: sudo modprobe joydev"
-        echo "4. 重新运行此脚本"
+        echo "Please do the following:"
+        echo "1. Ensure the Xbox controller is connected (check Bluetooth settings)"
+        echo "2. Press any button on the controller to activate it"
+        echo "3. Run: sudo modprobe joydev"
+        echo "4. Re-run this script"
         echo ""
         exit 1
     fi
 fi
 
-# 测试手柄输入
-echo -e "${BLUE}测试手柄输入（3秒）...${NC}"
-echo "请移动摇杆或按下按钮..."
+# Test controller input
+echo -e "${BLUE}Testing controller input (3 seconds)...${NC}"
+echo "Please move sticks or press buttons..."
 echo ""
 
 timeout 3 ros2 run joy joy_node --ros-args -p $DEVICE_PARAM &
 JOY_PID=$!
 sleep 1
 
-# 检查是否有joy数据
+# Check for joy data
 if ros2 topic list | grep -q "/joy"; then
-    echo -e "${GREEN}✓${NC} 手柄节点正在运行"
+    echo -e "${GREEN}✓${NC} Controller node is running"
     
-    # 显示一些joy数据
-    timeout 2 ros2 topic echo /joy --once 2>/dev/null && echo -e "${GREEN}✓${NC} 手柄输入正常" || echo -e "${YELLOW}!${NC} 未检测到手柄输入，请移动摇杆"
+    # Show some joy data
+    timeout 2 ros2 topic echo /joy --once 2>/dev/null && echo -e "${GREEN}✓${NC} Controller input is working" || echo -e "${YELLOW}!${NC} No controller input detected, please move sticks"
 fi
 
-# 停止测试节点
+# Stop test node
 kill $JOY_PID 2>/dev/null
 sleep 1
 
 echo ""
 echo "========================================"
-echo -e "${GREEN}启动完整控制系统${NC}"
+echo -e "${GREEN}Launching Full Control System${NC}"
 echo "========================================"
 echo ""
-echo "控制说明："
-echo "  左摇杆: X/Y平移"
-echo "  LT/RT: Z轴上下"
-echo "  右摇杆: Yaw/Pitch旋转"
-echo "  LB/RB: Roll旋转"
+echo "Controls:"
+echo "  Left stick: X/Y translation"
+echo "  LT/RT: Z-axis up/down"
+echo "  Right stick: Yaw/Pitch rotation"
+echo "  LB/RB: Roll rotation"
 echo ""
-echo "按 Ctrl+C 停止系统"
+echo "Press Ctrl+C to stop the system"
 echo ""
 sleep 2
 
-# 启动完整系统
+# Launch full system
 ros2 launch rs_a3_teleop simple_teleop.launch.py
-
 
 
 

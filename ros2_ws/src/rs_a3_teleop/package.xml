@@ -3,7 +3,7 @@
 <package format="3">
   <name>rs_a3_teleop</name>
   <version>0.0.1</version>
-  <description>RS-A3机械臂手柄遥控包，支持Xbox手柄和Joy-Con IMU控制</description>
+  <description>RS-A3 robot arm gamepad teleoperation package, supports Xbox controller and Joy-Con IMU control</description>
   <maintainer email="wy@todo.todo">wy</maintainer>
   <license>Apache-2.0</license>
 
