@@ -1,5 +1,5 @@
 #!/bin/bash
-# RS-A3 real hardware Xbox controller launch script
+# EL-A3 real hardware Xbox controller launch script
 # 
 # Usage: ./start_real_xbox_control.sh [can_interface]
 #   can_interface: CAN interface name (default: can0)
@@ -7,7 +7,7 @@
 CAN_INTERFACE=${1:-can0}
 
 echo "============================================"
-echo "RS-A3 Real Hardware Xbox Controller Launch"
+echo "EL-A3 Real Hardware Xbox Controller Launch"
 echo "============================================"
 
 # Check CAN interface
@@ -60,5 +60,5 @@ echo "============================================"
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=${CAN_INTERFACE}
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=${CAN_INTERFACE}
 

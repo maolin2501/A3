@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-将RS-A3机械臂所有关节移动到零位
+将EL-A3机械臂所有关节移动到零位
 """
 
 import rclpy

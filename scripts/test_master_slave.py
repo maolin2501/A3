@@ -32,12 +32,12 @@ class MasterSlaveTestNode(Node):
         self.joint_names = [f"L{i}_joint" for i in range(1, 7)]
         self.gripper_motor_id = 7
         
-        # RS05 电机参数范围（7号电机）
+        # EL05 电机参数范围（7号电机）
         self.P_MIN, self.P_MAX = -12.57, 12.57
         self.V_MIN, self.V_MAX = -50.0, 50.0
         self.KP_MIN, self.KP_MAX = 0.0, 500.0
         self.KD_MIN, self.KD_MAX = 0.0, 5.0
-        self.T_MIN, self.T_MAX = -5.5, 5.5
+        self.T_MIN, self.T_MAX = -6.0, 6.0
         
         # 状态
         self.master_slave_mode = False

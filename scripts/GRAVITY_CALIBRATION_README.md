@@ -1,8 +1,8 @@
-# RS-A3 重力补偿标定程序使用说明
+# EL-A3 重力补偿标定程序使用说明
 
 ## 概述
 
-本程序用于标定 RS-A3 机械臂的重力补偿参数。通过在多个关节角度采集力矩数据，拟合出每个关节的重力补偿模型：
+本程序用于标定 EL-A3 机械臂的重力补偿参数。通过在多个关节角度采集力矩数据，拟合出每个关节的重力补偿模型：
 
 ```
 τ = sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset
@@ -21,7 +21,7 @@
 
 ```bash
 # 终端 1: 启动控制器
-ros2 launch rs_a3_description rs_a3_control.launch.py
+ros2 launch el_a3_description el_a3_control.launch.py
 ```
 
 ### 2. 运行标定程序
@@ -107,7 +107,7 @@ config = CalibrationConfig(
 ### 控制台输出
 ```
 ================================================================================
-  RS-A3 重力补偿标定结果汇总
+  EL-A3 重力补偿标定结果汇总
 ================================================================================
 
 关节        sin_coeff    cos_coeff       offset       RMSE       R²
@@ -122,7 +122,7 @@ L3_joint       2.1456      -0.0567       0.0345     0.0380   0.9889
 保存在 `scripts/gravity_calibration_YYYYMMDD_HHMMSS.json`
 
 ### XACRO 参数
-复制到 `rs_a3_description/urdf/rs_a3_ros2_control.xacro`:
+复制到 `el_a3_description/urdf/el_a3_ros2_control.xacro`:
 
 ```xml
 <param name="gravity_comp_L2_sin">3.4821</param>
@@ -155,10 +155,10 @@ L3_joint       2.1456      -0.0567       0.0345     0.0380   0.9889
 
 ```bash
 # 启用零力矩模式（可手动拖动机械臂）
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+ros2 service call /el_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
 
 # 禁用零力矩模式
-ros2 service call /rs_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
+ros2 service call /el_a3/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
 ```
 
 ## 故障排除

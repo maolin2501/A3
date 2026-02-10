@@ -1,8 +1,8 @@
 # 机械臂结构模型 / Mechanical Structure Models
 
-本目录存放 RS-A3 机械臂的结构设计文件。
+本目录存放 EL-A3 机械臂的结构设计文件。
 
-This directory contains structural design files for the RS-A3 robotic arm.
+This directory contains structural design files for the EL-A3 robotic arm.
 
 ## 目录说明 / Directory Description
 
@@ -14,14 +14,14 @@ This directory contains structural design files for the RS-A3 robotic arm.
 
 ## 相关目录 / Related Directories
 
-- `rs_a3_description/meshes/` — ROS2 URDF 使用的 STL 碰撞/可视化模型
+- `el_a3_description/meshes/` — ROS2 URDF 使用的 STL 碰撞/可视化模型
 - `EDULITE-A3/meshes/` — 原始 URDF 导出的 PART/STL 文件
-- `RS_A3_urdf/RS-A3/meshes/` — 早期 URDF 版本的 STL 文件
+- `EL_A3_urdf/EL-A3/meshes/` — 早期 URDF 版本的 STL 文件
 
 ## 文件命名规范 / File Naming Convention
 
 ```
-RS-A3_<部件名>_<版本>.<扩展名>
-例：RS-A3_base_v2.step
-    RS-A3_assembly_full_v1.step
+EL-A3_<部件名>_<版本>.<扩展名>
+例：EL-A3_base_v2.step
+    EL-A3_assembly_full_v1.step
 ```

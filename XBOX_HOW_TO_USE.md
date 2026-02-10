@@ -78,7 +78,7 @@ ros2 topic echo /joy
 
 ## ⚙️ 当前配置
 
-控制参数（位于`/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/config/xbox_teleop.yaml`）：
+控制参数（位于`/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_teleop.yaml`）：
 
 - **更新频率**: 20 Hz
 - **平移速度**: 0.001 m/更新 (慢速，适合初学)
@@ -140,7 +140,7 @@ sudo apt install ros-humble-moveit-servo
 
 然后使用：
 ```bash
-ros2 launch rs_a3_teleop complete_teleop.launch.py
+ros2 launch el_a3_teleop complete_teleop.launch.py
 ```
 
 ## 🛑 停止系统
@@ -149,8 +149,8 @@ ros2 launch rs_a3_teleop complete_teleop.launch.py
 
 ## 📚 更多信息
 
-- 快速入门指南: `/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/QUICK_START.md`
-- 完整使用指南: `/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/USAGE_GUIDE.md`
+- 快速入门指南: `/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md`
+- 完整使用指南: `/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md`
 - 安装指南: `/home/wy/RS/A3/XBOX_CONTROL_SETUP.md`
 
 ## 🎯 快速测试步骤
@@ -178,12 +178,12 @@ cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 source /home/wy/RS/A3/install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 ```
 
 ### 仿真控制（无硬件）
 ```bash
-ros2 launch rs_a3_teleop simple_teleop.launch.py
+ros2 launch el_a3_teleop simple_teleop.launch.py
 ```
 
 ### 速度控制

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RS-A3 teleoperation test program 2
+EL-A3 teleoperation test program 2
 
 Use master arm on can1 to control slave arms on can0, can2, can3, can4
 
@@ -24,7 +24,7 @@ from enum import IntEnum
 
 class MotorType(IntEnum):
     RS00 = 0  # Joints 1-3
-    RS05 = 1  # Joints 4-6
+    EL05 = 1  # Joints 4-6
 
 
 @dataclass
@@ -43,12 +43,12 @@ class MotorParams:
 
 MOTOR_PARAMS = {
     MotorType.RS00: MotorParams(v_min=-33.0, v_max=33.0, t_min=-14.0, t_max=14.0),
-    MotorType.RS05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-5.5, t_max=5.5),
+    MotorType.EL05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-6.0, t_max=6.0),
 }
 
 MOTOR_TYPE_MAP = {1: MotorType.RS00, 2: MotorType.RS00, 3: MotorType.RS00,
-                  4: MotorType.RS05, 5: MotorType.RS05, 6: MotorType.RS05,
-                  7: MotorType.RS05}  # Motor 7: gripper
+                  4: MotorType.EL05, 5: MotorType.EL05, 6: MotorType.EL05,
+                  7: MotorType.EL05}  # Motor 7: gripper
 
 
 @dataclass
@@ -379,7 +379,7 @@ class TeleopTest:
 
 def main():
     print("=" * 50)
-    print("  RS-A3 Teleoperation Test 2")
+    print("  EL-A3 Teleoperation Test 2")
     print("  Master: can1")
     print("  Slaves: can0, can2, can3, can4")
     print("=" * 50)

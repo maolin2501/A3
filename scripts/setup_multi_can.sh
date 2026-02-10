@@ -1,5 +1,5 @@
 #!/bin/bash
-# RS-A3 multi-CAN interface configuration script
+# EL-A3 multi-CAN interface configuration script
 # Used to configure CAN communication interfaces for multiple robot arms
 
 # Configuration parameters
@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "=================================="
-echo "RS-A3 Multi-CAN Interface Setup"
+echo "EL-A3 Multi-CAN Interface Setup"
 echo "=================================="
 
 # Check for root privileges
@@ -82,8 +82,8 @@ echo "=================================="
 echo "Usage Examples"
 echo "=================================="
 echo "# Launch dual-arm system"
-echo "ros2 launch rs_a3_description multi_arm_control.launch.py"
+echo "ros2 launch el_a3_description multi_arm_control.launch.py"
 echo ""
 echo "# Launch master-slave teleoperation"
-echo "ros2 launch rs_a3_teleop master_slave.launch.py master_ns:=arm1 slave_ns:=arm2"
+echo "ros2 launch el_a3_teleop master_slave.launch.py master_ns:=arm1 slave_ns:=arm2"
 echo ""

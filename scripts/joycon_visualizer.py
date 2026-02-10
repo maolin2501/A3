@@ -31,7 +31,7 @@ import os
 
 # 添加路径以导入 IMU 处理模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 
-                                '../ros2_ws/src/rs_a3_teleop/rs_a3_teleop'))
+                                '../ros2_ws/src/el_a3_teleop/el_a3_teleop'))
 
 try:
     from imu_processor import IMUProcessor, CalibrationState, MadgwickFilter

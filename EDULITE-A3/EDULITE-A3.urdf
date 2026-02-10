@@ -233,20 +233,20 @@
       <mass value="0.44692"/>
       <inertia ixx="0.000543249" ixy="0.000320527" ixz="2.88671e-06" iyy="0.00040341" iyz="-3.57587e-06" izz="0.000797799"/>
     </inertial>
-    <!-- Part rs05_l5 -->
+    <!-- Part el05_l5 -->
     <visual>
       <origin xyz="0.005 -0.134 2.4503e-16" rpy="-1.5708 -1.95896e-16 -5.55112e-17"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05_l5.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05_l5.stl"/>
       </geometry>
-      <material name="rs05_l5_material">
+      <material name="el05_l5_material">
         <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
       <origin xyz="0.005 -0.134 2.4503e-16" rpy="-1.5708 -1.95896e-16 -5.55112e-17"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05_l5.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05_l5.stl"/>
       </geometry>
     </collision>
     <!-- Part l5_shake -->
@@ -281,20 +281,20 @@
         <mesh filename="package://edulite_a3_description/meshes/l4_l5_link_back.stl"/>
       </geometry>
     </collision>
-    <!-- Part rs05_l4 -->
+    <!-- Part el05_l4 -->
     <visual>
       <origin xyz="0.005 -0.134 2.86663e-16" rpy="-1.5708 2.11734e-33 0"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05_l4.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05_l4.stl"/>
       </geometry>
-      <material name="rs05_l4_material">
+      <material name="el05_l4_material">
         <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
       <origin xyz="0.005 -0.134 2.86663e-16" rpy="-1.5708 2.11734e-33 0"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05_l4.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05_l4.stl"/>
       </geometry>
     </collision>
     <!-- Part l4_l5_link_back_2 -->
@@ -377,20 +377,20 @@
         <mesh filename="package://edulite_a3_description/meshes/hand_r.stl"/>
       </geometry>
     </collision>
-    <!-- Part rs05 -->
+    <!-- Part el05 -->
     <visual>
       <origin xyz="-1.09157e-15 2.30371e-15 -0.0755" rpy="-3.14159 -5.37371e-16 -5.2367e-16"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05.stl"/>
       </geometry>
-      <material name="rs05_material">
+      <material name="el05_material">
         <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
       <origin xyz="-1.09157e-15 2.30371e-15 -0.0755" rpy="-3.14159 -5.37371e-16 -5.2367e-16"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05.stl"/>
       </geometry>
     </collision>
     <!-- Part rack__30_teeth -->
@@ -505,20 +505,20 @@
         <mesh filename="package://edulite_a3_description/meshes/part_3.stl"/>
       </geometry>
     </collision>
-    <!-- Part rs05_2 -->
+    <!-- Part el05_2 -->
     <visual>
       <origin xyz="2.64545e-17 1.38778e-16 -0.0305" rpy="2.53064e-15 -6.05486e-16 -4.37367e-16"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05.stl"/>
       </geometry>
-      <material name="rs05_2_material">
+      <material name="el05_2_material">
         <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
       <origin xyz="2.64545e-17 1.38778e-16 -0.0305" rpy="2.53064e-15 -6.05486e-16 -4.37367e-16"/>
       <geometry>
-        <mesh filename="package://edulite_a3_description/meshes/rs05.stl"/>
+        <mesh filename="package://edulite_a3_description/meshes/el05.stl"/>
       </geometry>
     </collision>
     <!-- Part spur_gear__14_teeth -->

@@ -2,7 +2,7 @@
 
 ## 📦 已完成的工作
 
-✅ 创建了`rs_a3_teleop`功能包  
+✅ 创建了`el_a3_teleop`功能包  
 ✅ 实现了两种控制节点（MoveGroup和Servo）  
 ✅ 配置了完整的启动文件  
 ✅ 编译并测试通过  
@@ -48,7 +48,7 @@ sudo apt install joystick
 ```bash
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
-colcon build --packages-select rs_a3_teleop
+colcon build --packages-select el_a3_teleop
 source install/setup.bash
 ```
 
@@ -70,11 +70,11 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 # 仿真模式
-ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
+ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
 
 # 真实硬件模式
 sudo ./scripts/setup_can.sh can0  # 先设置CAN接口
-ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
+ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
 ```
 
 这个命令会自动启动：
@@ -94,14 +94,14 @@ ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_moveit_config robot.launch.py
+ros2 launch el_a3_moveit_config robot.launch.py
 
 # 终端2: 启动MoveIt Servo
 ros2 run moveit_servo servo_node --ros-args \
-  --params-file /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/config/moveit_servo_config.yaml
+  --params-file /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
 
 # 终端3: 启动手柄控制
-ros2 launch rs_a3_teleop xbox_servo_teleop.launch.py
+ros2 launch el_a3_teleop xbox_servo_teleop.launch.py
 ```
 
 ## 🔧 配置调整
@@ -111,7 +111,7 @@ ros2 launch rs_a3_teleop xbox_servo_teleop.launch.py
 编辑配置文件：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/config/xbox_servo_teleop.yaml
+nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
 ```
 
 修改这些参数：
@@ -134,7 +134,7 @@ xbox_servo_teleop_node:
 编辑Servo配置：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/config/moveit_servo_config.yaml
+nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
 ```
 
 ## 🔍 调试和故障排除
@@ -201,13 +201,13 @@ ros2 topic echo /servo_node/status
 
 ```bash
 # 快速开始指南
-/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/QUICK_START.md
+/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md
 
 # 完整README
-/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/README.md
+/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/README.md
 
 # 详细使用指南
-/home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/USAGE_GUIDE.md
+/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
 
 # 测试脚本
 /home/wy/RS/A3/scripts/test_xbox_control.sh
@@ -217,10 +217,10 @@ ros2 topic echo /servo_node/status
 
 ```bash
 # 查看快速开始
-cat /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/QUICK_START.md
+cat /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md
 
 # 查看完整指南
-less /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/USAGE_GUIDE.md
+less /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
 ```
 
 ## 🎯 下一步
@@ -236,7 +236,7 @@ less /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/USAGE_GUIDE.md
 
 3. **首次测试**（建议在仿真中）：
    ```bash
-   ros2 launch rs_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
+   ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
    ```
 
 4. **熟悉控制**：
@@ -270,7 +270,7 @@ less /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/USAGE_GUIDE.md
 
 ## 🎉 完成
 
-Xbox手柄实时控制功能已经完全集成到RS-A3系统中。祝使用愉快！
+Xbox手柄实时控制功能已经完全集成到EL-A3系统中。祝使用愉快！
 
 ---
 

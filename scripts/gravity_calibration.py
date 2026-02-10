@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RS-A3 高精度重力补偿标定程序
+EL-A3 高精度重力补偿标定程序
 
 功能:
 1. 以 home 点 (零位) 为基础
@@ -9,10 +9,10 @@ RS-A3 高精度重力补偿标定程序
 4. 验证标定结果并输出 XACRO 参数
 
 使用方法:
-1. 启动机器人控制器: ros2 launch rs_a3_description rs_a3_control.launch.py
+1. 启动机器人控制器: ros2 launch el_a3_description el_a3_control.launch.py
 2. 运行标定: python3 gravity_calibration.py
 
-作者: RS-A3 Project
+作者: EL-A3 Project
 """
 
 import rclpy
@@ -134,11 +134,11 @@ class GravityCalibrationNode(Node):
         # 零力矩模式服务客户端
         self.zero_torque_client = self.create_client(
             SetBool,
-            '/rs_a3/set_zero_torque_mode'
+            '/el_a3/set_zero_torque_mode'
         )
         
         self.get_logger().info('=' * 60)
-        self.get_logger().info('  RS-A3 重力补偿标定程序')
+        self.get_logger().info('  EL-A3 重力补偿标定程序')
         self.get_logger().info('=' * 60)
         
     def joint_state_callback(self, msg: JointState):
@@ -471,7 +471,7 @@ class GravityCalibrationNode(Node):
     def print_calibration_summary(self):
         """打印标定结果汇总"""
         print('\n' + '=' * 80)
-        print('  RS-A3 重力补偿标定结果汇总')
+        print('  EL-A3 重力补偿标定结果汇总')
         print('=' * 80)
         print(f'\n{"关节":<10} {"sin_coeff":>12} {"cos_coeff":>12} {"offset":>12} {"RMSE":>10} {"R²":>8}')
         print('-' * 80)
@@ -487,7 +487,7 @@ class GravityCalibrationNode(Node):
         print('-' * 80)
         
         # 生成 XACRO 参数
-        print('\n生成的 XACRO 参数 (复制到 rs_a3_ros2_control.xacro):')
+        print('\n生成的 XACRO 参数 (复制到 el_a3_ros2_control.xacro):')
         print('-' * 80)
         
         for name in self.joint_names:
@@ -548,7 +548,7 @@ def interactive_menu(node: GravityCalibrationNode):
     """交互式菜单"""
     while True:
         print('\n' + '=' * 50)
-        print('  RS-A3 重力补偿标定程序')
+        print('  EL-A3 重力补偿标定程序')
         print('=' * 50)
         print('  [1] 全自动标定 (所有关节)')
         print('  [2] 标定单个关节')
@@ -630,7 +630,7 @@ def main():
         print('\n正在连接...')
         if not node.wait_for_state(timeout=10.0):
             print('错误: 无法获取关节状态，请确保控制器已启动!')
-            print('启动命令: ros2 launch rs_a3_description rs_a3_control.launch.py')
+            print('启动命令: ros2 launch el_a3_description el_a3_control.launch.py')
             return
         
         print('连接成功!')

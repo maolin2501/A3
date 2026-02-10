@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RS-A3 arm inertia parameter calibration
+EL-A3 arm inertia parameter calibration
 
 Use the Pinocchio dynamics library to measure torques across multiple joint
 configurations and fit link inertia parameters (mass, COM) for accurate gravity
@@ -45,8 +45,8 @@ except ImportError:
 @dataclass
 class CalibrationConfig:
     """Calibration config"""
-    urdf_path: str = "/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf"
-    output_path: str = "/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml"
+    urdf_path: str = "/home/wy/RS/A3/el_a3_description/urdf/el_a3.urdf"
+    output_path: str = "/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml"
     
     joint_names: List[str] = field(default_factory=lambda: [
         'L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint'
@@ -474,7 +474,7 @@ class InertiaCalibrator(Node):
         """
         mode_names = {'quick': 'quick', 'full': 'full', 'high': 'high', 'ultra': 'ultra'}
         self.get_logger().info('=' * 60)
-        self.get_logger().info(f'  RS-A3 inertia calibration ({mode_names.get(mode, mode)} mode)')
+        self.get_logger().info(f'  EL-A3 inertia calibration ({mode_names.get(mode, mode)} mode)')
         self.get_logger().info('=' * 60)
         
         if self.model is None:
@@ -612,7 +612,7 @@ class InertiaCalibrator(Node):
         Keep calibrated L2/L3 and only optimize L4/L5/L6.
         """
         self.get_logger().info('=' * 60)
-        self.get_logger().info('  RS-A3 wrist calibration (L4/L5/L6)')
+        self.get_logger().info('  EL-A3 wrist calibration (L4/L5/L6)')
         self.get_logger().info('=' * 60)
         
         if self.model is None:
@@ -789,7 +789,7 @@ class InertiaCalibrator(Node):
     
     def save_results(self, results: Dict, output_path: str):
         """Save calibration results to YAML file"""
-        yaml_content = f"""# RS-A3 arm inertia parameters
+        yaml_content = f"""# EL-A3 arm inertia parameters
 # For Pinocchio gravity compensation
 # These parameters are fitted by the calibration program and override URDF defaults
 #
@@ -843,17 +843,17 @@ calibration_info:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='RS-A3 inertia calibration')
+    parser = argparse.ArgumentParser(description='EL-A3 inertia calibration')
     parser.add_argument('--quick', action='store_true', help='Quick mode (~20 points)')
     parser.add_argument('--high', action='store_true', help='High precision (~80 points)')
     parser.add_argument('--ultra', action='store_true', help='Ultra precision (~120 points)')
     parser.add_argument('--wrist', action='store_true', help='Wrist mode (only L4/L5/L6)')
     parser.add_argument('--samples', type=int, default=40, help='Samples per point (default 40)')
     parser.add_argument('--output', type=str, 
-                        default='/home/wy/RS/A3/rs_a3_description/config/inertia_params.yaml',
+                        default='/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml',
                         help='Output config file path')
     parser.add_argument('--urdf', type=str,
-                        default='/home/wy/RS/A3/rs_a3_description/urdf/rs_a3.urdf',
+                        default='/home/wy/RS/A3/el_a3_description/urdf/el_a3.urdf',
                         help='URDF file path')
     
     args = parser.parse_args()

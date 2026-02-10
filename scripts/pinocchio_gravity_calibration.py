@@ -13,7 +13,7 @@ Pinocchio 重力补偿标定程序
 5. 输出标定结果
 
 使用方法：
-    ros2 run rs_a3_description pinocchio_gravity_calibration.py [options]
+    ros2 run el_a3_description pinocchio_gravity_calibration.py [options]
     
     选项：
         --urdf PATH     URDF文件路径
@@ -115,7 +115,7 @@ class PinocchioGravityCalibrator(Node):
             self, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
         
         self.zero_torque_client = self.create_client(
-            SetBool, '/rs_a3/set_zero_torque_mode')
+            SetBool, '/el_a3/set_zero_torque_mode')
         
         # 初始化 Pinocchio
         if PINOCCHIO_AVAILABLE and config.urdf_path:
@@ -425,7 +425,7 @@ class PinocchioGravityCalibrator(Node):
         
         # 输出 XACRO 配置参数
         self.get_logger().info('\n' + '=' * 60)
-        self.get_logger().info('  XACRO 配置参数（复制到 rs_a3_ros2_control.xacro）')
+        self.get_logger().info('  XACRO 配置参数（复制到 el_a3_ros2_control.xacro）')
         self.get_logger().info('=' * 60)
         
         for i, joint_name in enumerate(self.joint_names):
@@ -460,7 +460,7 @@ class PinocchioGravityCalibrator(Node):
 def main():
     parser = argparse.ArgumentParser(description='Pinocchio 重力补偿标定')
     parser.add_argument('--urdf', type=str, 
-                        default='/home/wy/RS/A3/install/rs_a3_description/share/rs_a3_description/urdf/rs_a3.urdf',
+                        default='/home/wy/RS/A3/install/el_a3_description/share/el_a3_description/urdf/el_a3.urdf',
                         help='URDF 文件路径')
     parser.add_argument('--quick', action='store_true', help='快速模式')
     parser.add_argument('--verify', action='store_true', help='仅验证模式')

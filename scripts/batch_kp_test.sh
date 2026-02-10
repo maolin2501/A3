@@ -3,7 +3,7 @@
 # Usage: ./batch_kp_test.sh
 
 WORKSPACE="/home/wy/RS/A3/ros2_ws"
-XACRO_FILE="${WORKSPACE}/src/rs_a3_description/urdf/rs_a3_ros2_control.xacro"
+XACRO_FILE="${WORKSPACE}/src/el_a3_description/urdf/el_a3_ros2_control.xacro"
 RESULT_FILE="/home/wy/RS/A3/kp_test_results.txt"
 
 # Kp values to test
@@ -35,12 +35,12 @@ for KP in "${KP_VALUES[@]}"; do
     # Rebuild
     cd $WORKSPACE
     source /opt/ros/humble/setup.bash
-    colcon build --packages-select rs_a3_description > /dev/null 2>&1
+    colcon build --packages-select el_a3_description > /dev/null 2>&1
     source install/setup.bash
     
     # Launch robot
     echo "Launching controller..."
-    ros2 launch rs_a3_moveit_config robot.launch.py can_interface:=can1 > /tmp/ros_launch_${KP}.log 2>&1 &
+    ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can1 > /tmp/ros_launch_${KP}.log 2>&1 &
     LAUNCH_PID=$!
     
     # Wait for startup

@@ -211,7 +211,7 @@ cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch rs_a3_teleop simple_teleop.launch.py
+ros2 launch el_a3_teleop simple_teleop.launch.py
 ```
 
 ## 📝 检查列表
@@ -233,7 +233,7 @@ jstest /dev/input/js0
 # 终端2: 启动控制系统
 cd /home/wy/RS/A3/ros2_ws
 source install/setup.bash
-ros2 launch rs_a3_teleop simple_teleop.launch.py
+ros2 launch el_a3_teleop simple_teleop.launch.py
 
 # 终端3: 监控手柄数据
 ros2 topic echo /joy

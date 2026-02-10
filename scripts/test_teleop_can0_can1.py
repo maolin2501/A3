@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RS-A3 遥操作测试程序
+EL-A3 遥操作测试程序
 
 通过 can0 控制主臂（零力矩模式），can1 跟随主臂位置
 
@@ -24,7 +24,7 @@ from enum import IntEnum
 
 class MotorType(IntEnum):
     RS00 = 0  # 1-3号关节
-    RS05 = 1  # 4-6号关节
+    EL05 = 1  # 4-6号关节
 
 
 @dataclass
@@ -43,14 +43,14 @@ class MotorParams:
 
 MOTOR_PARAMS = {
     MotorType.RS00: MotorParams(v_min=-33.0, v_max=33.0, t_min=-14.0, t_max=14.0),
-    MotorType.RS05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-5.5, t_max=5.5),
+    MotorType.EL05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-6.0, t_max=6.0),
 }
 
 MOTOR_TYPE_MAP = {1: MotorType.RS00, 2: MotorType.RS00, 3: MotorType.RS00,
-                  4: MotorType.RS05, 5: MotorType.RS05, 6: MotorType.RS05,
-                  7: MotorType.RS05}  # 7号电机：夹爪
+                  4: MotorType.EL05, 5: MotorType.EL05, 6: MotorType.EL05,
+                  7: MotorType.EL05}  # 7号电机：夹爪
 
-# 关节方向（与 rs_a3_ros2_control.xacro 配置一致）
+# 关节方向（与 el_a3_ros2_control.xacro 配置一致）
 # 用于将关节坐标系转换为电机坐标系
 JOINT_DIRECTIONS = {
     1: -1.0,  # L1
@@ -244,7 +244,7 @@ class TeleopTest:
         """加载标定后的惯性参数"""
         config_path = os.path.join(
             os.path.dirname(__file__), 
-            '../rs_a3_description/config/inertia_params.yaml'
+            '../el_a3_description/config/inertia_params.yaml'
         )
         
         params = {}
@@ -512,7 +512,7 @@ class TeleopTest:
 
 def main():
     print("=" * 50)
-    print("  RS-A3 遥操作测试")
+    print("  EL-A3 遥操作测试")
     print("  can0 -> can2, can1 -> can3")
     print("=" * 50)
     

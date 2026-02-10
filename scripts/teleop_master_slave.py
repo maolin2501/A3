@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RS-A3 主从遥操作脚本
+EL-A3 主从遥操作脚本
 
 功能：
 - can0: 主臂，运行零力矩模式（可手动拖动）
@@ -25,7 +25,7 @@ from enum import IntEnum
 class MotorType(IntEnum):
     """电机类型"""
     RS00 = 0  # 1-3号关节: 力矩±14Nm, 速度±33rad/s
-    RS05 = 1  # 4-6号关节: 力矩±5.5Nm, 速度±50rad/s
+    EL05 = 1  # 4-6号关节: 力矩±6Nm, 速度±50rad/s
 
 
 @dataclass
@@ -43,20 +43,20 @@ class MotorParams:
     kd_max: float = 5.0
 
 
-# RS00 和 RS05 电机参数
+# RS00 和 EL05 电机参数
 MOTOR_PARAMS = {
     MotorType.RS00: MotorParams(v_min=-33.0, v_max=33.0, t_min=-14.0, t_max=14.0),
-    MotorType.RS05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-5.5, t_max=5.5),
+    MotorType.EL05: MotorParams(v_min=-50.0, v_max=50.0, t_min=-6.0, t_max=6.0),
 }
 
-# 电机ID到类型的映射（1-3是RS00，4-6是RS05）
+# 电机ID到类型的映射（1-3是RS00，4-6是EL05）
 MOTOR_TYPE_MAP = {
     1: MotorType.RS00,
     2: MotorType.RS00,
     3: MotorType.RS00,
-    4: MotorType.RS05,
-    5: MotorType.RS05,
-    6: MotorType.RS05,
+    4: MotorType.EL05,
+    5: MotorType.EL05,
+    6: MotorType.EL05,
 }
 
 # 关节方向（与 xacro 配置一致）
@@ -524,7 +524,7 @@ def signal_handler(sig, frame):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='RS-A3 主从遥操作')
+    parser = argparse.ArgumentParser(description='EL-A3 主从遥操作')
     parser.add_argument('--master', type=str, default='can0',
                         help='主臂 CAN 接口 (默认: can0)')
     parser.add_argument('--slaves', type=str, default='can1,can2,can3,can4',
@@ -544,7 +544,7 @@ def main():
     slave_interfaces = [s.strip() for s in args.slaves.split(',') if s.strip()]
     
     print("=" * 60)
-    print("  RS-A3 主从遥操作")
+    print("  EL-A3 主从遥操作")
     print("=" * 60)
     print(f"  主臂: {args.master} (零力矩模式, Kd={args.master_kd})")
     print(f"  从臂: {slave_interfaces} (位置跟随, Kp={args.slave_kp}, Kd={args.slave_kd})")

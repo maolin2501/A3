@@ -85,7 +85,7 @@ ros2 run joy joy_node --ros-args -p device_name:=/dev/input/event20 -p device_id
 编辑launch文件以使用event设备：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/launch/simple_teleop.launch.py
+nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/launch/simple_teleop.launch.py
 ```
 
 将joy节点的参数改为：
@@ -102,7 +102,7 @@ cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch rs_a3_teleop simple_teleop.launch.py
+ros2 launch el_a3_teleop simple_teleop.launch.py
 ```
 
 ## 📝 一键启动脚本

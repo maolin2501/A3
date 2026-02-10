@@ -1,5 +1,5 @@
 #!/bin/bash
-# CAN interface setup script for RS-A3 robot arm with candlight/gs_usb adapter
+# CAN interface setup script for EL-A3 robot arm with candlight/gs_usb adapter
 # 
 # Usage: ./setup_can.sh [can_interface] [bitrate]
 #   can_interface: CAN interface name (default: can0)

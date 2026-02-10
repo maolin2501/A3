@@ -32,20 +32,20 @@ else
     exit 1
 fi
 
-# Check rs_a3_teleop package
-echo -n "3. Checking rs_a3_teleop package... "
+# Check el_a3_teleop package
+echo -n "3. Checking el_a3_teleop package... "
 source /home/wy/RS/A3/ros2_ws/install/setup.bash
-if ros2 pkg list | grep -q rs_a3_teleop; then
+if ros2 pkg list | grep -q el_a3_teleop; then
     echo -e "${GREEN}Passed${NC}"
 else
     echo -e "${RED}Failed${NC}"
-    echo "   rs_a3_teleop package not found"
+    echo "   el_a3_teleop package not found"
     exit 1
 fi
 
 # Check executables
 echo -n "4. Checking executables... "
-if ros2 pkg executables rs_a3_teleop | grep -q xbox_servo_teleop_node; then
+if ros2 pkg executables el_a3_teleop | grep -q xbox_servo_teleop_node; then
     echo -e "${GREEN}Passed${NC}"
 else
     echo -e "${RED}Failed${NC}"
@@ -55,7 +55,7 @@ fi
 
 # Check launch files
 echo -n "5. Checking launch files... "
-LAUNCH_DIR="/home/wy/RS/A3/ros2_ws/install/rs_a3_teleop/share/rs_a3_teleop/launch"
+LAUNCH_DIR="/home/wy/RS/A3/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/launch"
 if [ -f "$LAUNCH_DIR/complete_teleop.launch.py" ]; then
     echo -e "${GREEN}Passed${NC}"
 else
@@ -66,7 +66,7 @@ fi
 
 # Check config files
 echo -n "6. Checking config files... "
-CONFIG_DIR="/home/wy/RS/A3/ros2_ws/install/rs_a3_teleop/share/rs_a3_teleop/config"
+CONFIG_DIR="/home/wy/RS/A3/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/config"
 if [ -f "$CONFIG_DIR/xbox_servo_teleop.yaml" ]; then
     echo -e "${GREEN}Passed${NC}"
 else
@@ -119,17 +119,17 @@ echo ""
 echo "Available launch commands:"
 echo ""
 echo "1. Full system (recommended):"
-echo "   ${GREEN}ros2 launch rs_a3_teleop complete_teleop.launch.py${NC}"
+echo "   ${GREEN}ros2 launch el_a3_teleop complete_teleop.launch.py${NC}"
 echo ""
 echo "2. Controller only (requires robot and MoveIt Servo to be running):"
-echo "   ${GREEN}ros2 launch rs_a3_teleop xbox_servo_teleop.launch.py${NC}"
+echo "   ${GREEN}ros2 launch el_a3_teleop xbox_servo_teleop.launch.py${NC}"
 echo ""
 echo "3. Test controller input:"
 echo "   ${GREEN}ros2 run joy joy_node${NC}"
 echo "   ${GREEN}ros2 topic echo /joy${NC}"
 echo ""
 echo "Detailed usage guide:"
-echo "   cat /home/wy/RS/A3/ros2_ws/src/rs_a3_teleop/QUICK_START.md"
+echo "   cat /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md"
 echo ""
 
 

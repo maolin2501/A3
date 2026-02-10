@@ -1,10 +1,10 @@
-# RS-A3 机械臂 ROS2 控制系统
+# EL-A3 机械臂 ROS2 控制系统
 
-> **RS-A3** 是一款 6 自由度桌面级机械臂，基于 ROS2 Control 构建，采用 CAN 总线驱动 Robstride 电机。具备 S 曲线轨迹规划、Pinocchio 动力学重力补偿与自动惯性标定能力，支持 Xbox 手柄笛卡尔遥操作、主从遥操作、拖动示教、MoveIt2 运动规划及视觉抓取，兼顾运动平滑性与安全保护。
+> **EL-A3** 是一款 6 自由度桌面级机械臂，基于 ROS2 Control 构建，采用 CAN 总线驱动 Robstride 电机。具备 S 曲线轨迹规划、Pinocchio 动力学重力补偿与自动惯性标定能力，支持 Xbox 手柄笛卡尔遥操作、主从遥操作、拖动示教、MoveIt2 运动规划及视觉抓取，兼顾运动平滑性与安全保护。
 
 ## 📋 目录
 
-- [简介](#rs-a3-机械臂-ros2-控制系统)
+- [简介](#el-a3-机械臂-ros2-控制系统)
 - [系统概述](#系统概述)
 - [硬件要求](#硬件要求)
 - [软件环境](#软件环境)
@@ -16,7 +16,7 @@
 - [电机通信协议](#电机通信协议)
 - [故障排除](#故障排除)
 - [目录结构](#目录结构)
-- [English Version](#rs-a3-robotic-arm-ros2-control-system-english)
+- [English Version](#el-a3-robotic-arm-ros2-control-system-english)
 
 ---
 
@@ -54,10 +54,10 @@
 | L1_joint | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
 | L2_joint | 2 | RS00 | ±14 Nm | ±33 rad/s | -0.17~3.14 rad (-10°~180°) | +1 |
 | L3_joint | 3 | RS00 | ±14 Nm | ±33 rad/s | -2.96~0.17 rad (-170°~10°) | -1 |
-| L4_joint | 4 | RS05 | ±5.5 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
-| L5_joint | 5 | RS05 | ±5.5 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
-| L6_joint | 6 | RS05 | ±5.5 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
-| 夹爪 | 7 | RS05 | ±0.4 Nm* | - | - | +1 |
+| L4_joint | 4 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
+| L5_joint | 5 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
+| L6_joint | 6 | EL05 | ±6 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
+| 夹爪 | 7 | EL05 | ±0.4 Nm* | - | - | +1 |
 
 > *夹爪使用力矩控制模式，±0.4Nm 通过方向键上下控制
 
@@ -67,7 +67,7 @@
 
 ### 必需硬件
 
-- **RS-A3 机械臂** (含 6 个 Robstride 电机)
+- **EL-A3 机械臂** (含 6 个 Robstride 电机)
 - **CAN 适配器**: CANdle / gs_usb 兼容设备
 - **电源**: 24V/48V 直流电源 (根据电机规格)
 - **PC**: Ubuntu 22.04 x86_64
@@ -142,10 +142,10 @@ cd /home/wy/RS/A3/scripts
 
 | 功能包 | 说明 |
 |--------|------|
-| `rs_a3_hardware` | ROS2 Control 硬件接口，实现 CAN 通信驱动 |
-| `rs_a3_description` | URDF 机器人描述、ros2_control 配置、控制器参数 |
-| `rs_a3_moveit_config` | MoveIt2 运动规划配置 |
-| `rs_a3_teleop` | Xbox 手柄实时笛卡尔空间控制 |
+| `el_a3_hardware` | ROS2 Control 硬件接口，实现 CAN 通信驱动 |
+| `el_a3_description` | URDF 机器人描述、ros2_control 配置、控制器参数 |
+| `el_a3_moveit_config` | MoveIt2 运动规划配置 |
+| `el_a3_teleop` | Xbox 手柄实时笛卡尔空间控制 |
 
 ---
 
@@ -207,7 +207,7 @@ sudo ./scripts/setup_can.sh can0
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 ```
 
 或使用一键脚本:
@@ -262,7 +262,7 @@ sudo ./scripts/setup_can.sh can1 1000000
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 
 # 3. 按 Menu 键切换主从模式
 ```
@@ -312,7 +312,7 @@ ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
 无需真实硬件，使用 mock 硬件进行测试：
 
 ```bash
-ros2 launch rs_a3_moveit_config demo.launch.py
+ros2 launch el_a3_moveit_config demo.launch.py
 ```
 
 ### 仿真模式 + Xbox 手柄控制
@@ -320,7 +320,7 @@ ros2 launch rs_a3_moveit_config demo.launch.py
 使用仿真硬件配合 Xbox 手柄进行测试（无需真实机械臂）：
 
 ```bash
-ros2 launch rs_a3_teleop sim_teleop.launch.py
+ros2 launch el_a3_teleop sim_teleop.launch.py
 ```
 
 ### 真实硬件 + MoveIt 控制
@@ -330,20 +330,20 @@ ros2 launch rs_a3_teleop sim_teleop.launch.py
 sudo ./scripts/setup_can.sh can0
 
 # 启动 MoveIt 控制系统
-ros2 launch rs_a3_moveit_config robot.launch.py can_interface:=can0
+ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can0
 ```
 
 ### 仅启动 ros2_control (不带 MoveIt)
 
 ```bash
-ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
+ros2 launch el_a3_description el_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
 ```
 
 ---
 
 ## 控制参数
 
-### 硬件接口参数 (`rs_a3_ros2_control.xacro`)
+### 硬件接口参数 (`el_a3_ros2_control.xacro`)
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -387,7 +387,7 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 
 ```
                      ┌──────────────────────────────┐
-                     │    rs_a3_hardware.cpp         │
+                     │    el_a3_hardware.cpp         │
                      │    write() @ 200Hz            │
                      └──────────┬───────────────────┘
                                 │
@@ -408,7 +408,7 @@ ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false c
 τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio
 ```
 
-参数通过 `rs_a3_ros2_control.xacro` 配置：
+参数通过 `el_a3_ros2_control.xacro` 配置：
 
 ```xml
 <param name="gravity_comp_L2_sin">3.5</param>
@@ -463,7 +463,7 @@ write() @ 200Hz:
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `use_pinocchio_gravity` | true | 启用 Pinocchio 完整动力学重力补偿 |
-| `urdf_path` | rs_a3.urdf | URDF 文件路径 |
+| `urdf_path` | el_a3.urdf | URDF 文件路径 |
 | `inertia_config_path` | inertia_params.yaml | 标定后的惯性参数配置文件 |
 | `gravity_feedforward_ratio` | 0.5 | 正常模式重力前馈比例 (0~1) |
 
@@ -499,7 +499,7 @@ ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}
 
 #### 关节独立 Kp/Kd 配置
 
-零力矩模式下各关节可独立配置阻尼，在 `rs_a3_ros2_control.xacro` 中设置：
+零力矩模式下各关节可独立配置阻尼，在 `el_a3_ros2_control.xacro` 中设置：
 
 ```xml
 <param name="zero_torque_kp_L1">0.0</param>
@@ -565,14 +565,14 @@ python3 scripts/inertia_calibration.py --combo --samples 50
 
 #### 标定流程
 
-1. **启动控制器**: `ros2 launch rs_a3_description rs_a3_control.launch.py`
+1. **启动控制器**: `ros2 launch el_a3_description el_a3_control.launch.py`
 2. **运行标定程序**: 程序自动移动机械臂到各测试点采集数据
 3. **等待完成**: 标定完成后自动保存参数并返回 home 位置
 4. **重启控制器**: 重启后自动加载新参数
 
 #### 输出文件
 
-标定结果保存在 `rs_a3_description/config/inertia_params.yaml`：
+标定结果保存在 `el_a3_description/config/inertia_params.yaml`：
 
 ```yaml
 inertia_params:
@@ -601,7 +601,7 @@ calibration_info:
 | L5 | 腕部 Pitch | 末端姿态相关 |
 | L6 | 末端 Yaw | 负载变化敏感 |
 
-### 控制器参数 (`rs_a3_controllers.yaml`)
+### 控制器参数 (`el_a3_controllers.yaml`)
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -657,8 +657,8 @@ calibration_info:
 
 | Service | 类型 | 说明 |
 |---------|------|------|
-| `/rs_a3/set_zero_torque_mode` | `std_srvs/SetBool` | 启用/关闭零力矩模式（拖动示教） |
-| `/rs_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | 启用/关闭纯零力矩模式（主从遥操作主臂） |
+| `/el_a3/set_zero_torque_mode` | `std_srvs/SetBool` | 启用/关闭零力矩模式（拖动示教） |
+| `/el_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | 启用/关闭纯零力矩模式（主从遥操作主臂） |
 | `/compute_ik` | `moveit_msgs/GetPositionIK` | 逆运动学求解 |
 | `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` | 笛卡尔路径规划 |
 
@@ -700,8 +700,8 @@ base_link
 |------|------|------|
 | θ_target | ±12.57 rad | 目标位置 |
 | ω_target | 见电机规格 | 目标速度 (速度前馈，位置差分计算) |
-| Kp | 0~500 (RS00/RS05) | 位置刚度 |
-| Kd | 0~5 (RS00/RS05) | 阻尼系数 |
+| Kp | 0~500 (RS00/EL05) | 位置刚度 |
+| Kd | 0~5 (RS00/EL05) | 阻尼系数 |
 | τ_ff | 见电机规格 | 前馈力矩 (重力补偿) |
 
 ### 通信类型
@@ -818,38 +818,38 @@ colcon build --symlink-install
 ├── README.md                          # 本文档
 ├── 电机通信协议汇总.md                  # 电机通信协议详细说明
 │
-├── rs_a3_description/                 # 机器人描述包（URDF、配置、Launch）
+├── el_a3_description/                 # 机器人描述包（URDF、配置、Launch）
 │   ├── urdf/
-│   │   ├── rs_a3.urdf.xacro              # URDF 主文件（宏定义）
-│   │   ├── rs_a3.urdf                     # 编译后的 URDF
-│   │   └── rs_a3_ros2_control.xacro       # ros2_control 硬件接口配置
+│   │   ├── el_a3.urdf.xacro              # URDF 主文件（宏定义）
+│   │   ├── el_a3.urdf                     # 编译后的 URDF
+│   │   └── el_a3_ros2_control.xacro       # ros2_control 硬件接口配置
 │   ├── config/
-│   │   ├── rs_a3_controllers.yaml         # 单臂控制器参数
+│   │   ├── el_a3_controllers.yaml         # 单臂控制器参数
 │   │   ├── multi_arm_controllers.yaml     # 多臂控制器参数
 │   │   ├── multi_arm_config.yaml          # 多臂 CAN 接口和命名空间配置
 │   │   ├── master_slave_config.yaml       # 主从遥操作映射配置
 │   │   ├── inertia_params.yaml            # 标定后的惯性参数（arm1/通用）
 │   │   ├── inertia_params_arm2.yaml       # arm2 独立标定的惯性参数
-│   │   └── rs_a3_view.rviz               # RViz 可视化配置
+│   │   └── el_a3_view.rviz               # RViz 可视化配置
 │   ├── launch/
-│   │   ├── rs_a3_control.launch.py        # 单臂控制系统启动
+│   │   ├── el_a3_control.launch.py        # 单臂控制系统启动
 │   │   └── multi_arm_control.launch.py    # 多臂控制系统启动
 │   └── meshes/                            # 3D 模型文件 (STL)
 │
-├── rs_a3_hardware/                    # ROS2 Control 硬件接口包
-│   ├── include/rs_a3_hardware/
-│   │   ├── rs_a3_hardware.hpp             # 硬件接口头文件
+├── el_a3_hardware/                    # ROS2 Control 硬件接口包
+│   ├── include/el_a3_hardware/
+│   │   ├── el_a3_hardware.hpp             # 硬件接口头文件
 │   │   ├── robstride_can_driver.hpp       # CAN 驱动头文件
 │   │   └── s_curve_generator.hpp          # S曲线轨迹生成器
 │   ├── src/
-│   │   ├── rs_a3_hardware.cpp             # 硬件接口实现（Pinocchio重力补偿、零力矩模式）
+│   │   ├── el_a3_hardware.cpp             # 硬件接口实现（Pinocchio重力补偿、零力矩模式）
 │   │   ├── robstride_can_driver.cpp       # CAN 通信驱动实现
 │   │   └── s_curve_generator.cpp          # S曲线轨迹生成器实现
-│   └── rs_a3_hardware_plugin.xml          # 插件描述
+│   └── el_a3_hardware_plugin.xml          # 插件描述
 │
-├── rs_a3_moveit_config/               # MoveIt2 运动规划配置包
+├── el_a3_moveit_config/               # MoveIt2 运动规划配置包
 │   ├── config/
-│   │   ├── rs_a3.srdf                     # 语义机器人描述
+│   │   ├── el_a3.srdf                     # 语义机器人描述
 │   │   ├── kinematics.yaml                # 运动学求解器配置
 │   │   ├── joint_limits.yaml              # 关节限制
 │   │   ├── ompl_planning.yaml             # OMPL 规划器配置
@@ -860,7 +860,7 @@ colcon build --symlink-install
 │       └── robot.launch.py                # 真实硬件 + MoveIt
 │
 ├── ros2_ws/src/                       # ROS2 工作空间（Python 包）
-│   ├── rs_a3_teleop/                  # 遥操作包
+│   ├── el_a3_teleop/                  # 遥操作包
 │   │   ├── config/
 │   │   │   ├── xbox_teleop.yaml           # Xbox 手柄笛卡尔控制参数
 │   │   │   └── xbox_servo_teleop.yaml     # Xbox + MoveIt Servo 参数
@@ -870,13 +870,13 @@ colcon build --symlink-install
 │   │   │   ├── complete_teleop.launch.py  # 完整遥控启动
 │   │   │   ├── master_slave.launch.py     # 主从遥操作启动
 │   │   │   └── xbox_servo_teleop.launch.py # Xbox Servo 模式
-│   │   └── rs_a3_teleop/
+│   │   └── el_a3_teleop/
 │   │       ├── xbox_teleop_node.py        # Xbox 笛卡尔控制节点
 │   │       ├── master_slave_node.py       # 主从遥操作节点（一对多/多对多）
 │   │       └── xbox_servo_node.py         # Xbox Servo 控制节点
 │   │
-│   ├── rs_a3_web_ui/                  # Web 可视化控制界面
-│   │   ├── rs_a3_web_ui/
+│   ├── el_a3_web_ui/                  # Web 可视化控制界面
+│   │   ├── el_a3_web_ui/
 │   │   │   ├── web_server.py              # Flask Web 服务器
 │   │   │   └── ros2_bridge.py             # ROS2 桥接
 │   │   ├── templates/index.html           # Web 页面
@@ -924,7 +924,7 @@ colcon build --symlink-install
 │       └── datasheet/                       # 元器件数据手册
 │
 ├── EDULITE-A3/                        # 原始 URDF 导出模型 (PART/STL)
-├── RS_A3_urdf/                        # 早期 URDF 版本
+├── EL_A3_urdf/                        # 早期 URDF 版本
 │
 ├── ACTIVATE_XBOX_CONTROLLER.md        # Xbox 手柄激活说明
 ├── XBOX_CONTROL_SETUP.md              # Xbox 控制详细设置
@@ -956,7 +956,7 @@ colcon build --symlink-install
 
 ## Launch 文件参数
 
-### `rs_a3_teleop/real_teleop.launch.py`
+### `el_a3_teleop/real_teleop.launch.py`
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -964,7 +964,7 @@ colcon build --symlink-install
 | `host_can_id` | 253 | 主机 CAN ID |
 | `device` | /dev/input/js0 | 手柄设备路径 |
 
-### `rs_a3_moveit_config/robot.launch.py`
+### `el_a3_moveit_config/robot.launch.py`
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -972,7 +972,7 @@ colcon build --symlink-install
 | `host_can_id` | 253 | 主机 CAN ID |
 | `use_rviz` | true | 是否启动 RViz |
 
-### `rs_a3_moveit_config/demo.launch.py`
+### `el_a3_moveit_config/demo.launch.py`
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -997,13 +997,13 @@ Apache-2.0
 
 <br>
 
-# RS-A3 Robotic Arm ROS2 Control System (English)
+# EL-A3 Robotic Arm ROS2 Control System (English)
 
-> **RS-A3** is a 6-DOF desktop robotic arm built on ROS2 Control, driven by Robstride motors over CAN bus. It features S-curve trajectory planning, Pinocchio dynamics-based gravity compensation with automatic inertia calibration, and supports Xbox gamepad Cartesian teleoperation, master-slave teleoperation, gravity-compensated teach mode, MoveIt2 motion planning, and vision-based grasping — balancing motion smoothness with safety protection.
+> **EL-A3** is a 6-DOF desktop robotic arm built on ROS2 Control, driven by Robstride motors over CAN bus. It features S-curve trajectory planning, Pinocchio dynamics-based gravity compensation with automatic inertia calibration, and supports Xbox gamepad Cartesian teleoperation, master-slave teleoperation, gravity-compensated teach mode, MoveIt2 motion planning, and vision-based grasping — balancing motion smoothness with safety protection.
 
 ## Table of Contents
 
-- [Introduction](#rs-a3-robotic-arm-ros2-control-system-english)
+- [Introduction](#el-a3-robotic-arm-ros2-control-system-english)
 - [System Overview](#system-overview)
 - [Hardware Requirements](#hardware-requirements)
 - [Software Environment](#software-environment)
@@ -1052,10 +1052,10 @@ Apache-2.0
 | L1_joint | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
 | L2_joint | 2 | RS00 | ±14 Nm | ±33 rad/s | -0.17\~3.14 rad (-10°\~180°) | +1 |
 | L3_joint | 3 | RS00 | ±14 Nm | ±33 rad/s | -2.96\~0.17 rad (-170°\~10°) | -1 |
-| L4_joint | 4 | RS05 | ±5.5 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
-| L5_joint | 5 | RS05 | ±5.5 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
-| L6_joint | 6 | RS05 | ±5.5 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
-| Gripper | 7 | RS05 | ±0.4 Nm* | - | - | +1 |
+| L4_joint | 4 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
+| L5_joint | 5 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
+| L6_joint | 6 | EL05 | ±6 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
+| Gripper | 7 | EL05 | ±0.4 Nm* | - | - | +1 |
 
 > *Gripper uses torque control mode, ±0.4 Nm controlled via D-pad up/down
 
@@ -1065,7 +1065,7 @@ Apache-2.0
 
 ### Required
 
-- **RS-A3 Robotic Arm** (with 6 Robstride motors)
+- **EL-A3 Robotic Arm** (with 6 Robstride motors)
 - **CAN Adapter**: CANdle / gs_usb compatible device
 - **Power Supply**: 24V/48V DC (per motor specs)
 - **PC**: Ubuntu 22.04 x86_64
@@ -1139,10 +1139,10 @@ cd scripts
 
 | Package | Description |
 |---------|-------------|
-| `rs_a3_hardware` | ROS2 Control hardware interface with CAN communication driver |
-| `rs_a3_description` | URDF robot description, ros2_control config, controller parameters |
-| `rs_a3_moveit_config` | MoveIt2 motion planning configuration |
-| `rs_a3_teleop` | Xbox gamepad real-time Cartesian-space control |
+| `el_a3_hardware` | ROS2 Control hardware interface with CAN communication driver |
+| `el_a3_description` | URDF robot description, ros2_control config, controller parameters |
+| `el_a3_moveit_config` | MoveIt2 motion planning configuration |
+| `el_a3_teleop` | Xbox gamepad real-time Cartesian-space control |
 
 ---
 
@@ -1151,7 +1151,7 @@ cd scripts
 ### 1. Clone / Copy Project
 
 ```bash
-cd /path/to/RS-A3
+cd /path/to/EL-A3
 ```
 
 ### 2. Build Workspace
@@ -1201,7 +1201,7 @@ sudo ./scripts/setup_can.sh can0
 cd ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 ```
 
 Or use the one-click script:
@@ -1256,7 +1256,7 @@ sudo ./scripts/setup_can.sh can1 1000000
 cd ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 
 # 3. Press Menu button to toggle master-slave mode
 ```
@@ -1306,7 +1306,7 @@ ros2 launch rs_a3_teleop real_teleop.launch.py can_interface:=can0
 No real hardware needed — uses mock hardware:
 
 ```bash
-ros2 launch rs_a3_moveit_config demo.launch.py
+ros2 launch el_a3_moveit_config demo.launch.py
 ```
 
 ### Simulation + Xbox Gamepad
@@ -1314,27 +1314,27 @@ ros2 launch rs_a3_moveit_config demo.launch.py
 Test with simulated hardware and Xbox gamepad (no real arm required):
 
 ```bash
-ros2 launch rs_a3_teleop sim_teleop.launch.py
+ros2 launch el_a3_teleop sim_teleop.launch.py
 ```
 
 ### Real Hardware + MoveIt
 
 ```bash
 sudo ./scripts/setup_can.sh can0
-ros2 launch rs_a3_moveit_config robot.launch.py can_interface:=can0
+ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can0
 ```
 
 ### ros2_control Only (Without MoveIt)
 
 ```bash
-ros2 launch rs_a3_description rs_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
+ros2 launch el_a3_description el_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
 ```
 
 ---
 
 ## Control Parameters
 
-### Hardware Interface Parameters (`rs_a3_ros2_control.xacro`)
+### Hardware Interface Parameters (`el_a3_ros2_control.xacro`)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -1375,7 +1375,7 @@ The system uses a **dual-model architecture**: a simplified trigonometric model 
 
 ```
                      ┌──────────────────────────────┐
-                     │    rs_a3_hardware.cpp         │
+                     │    el_a3_hardware.cpp         │
                      │    write() @ 200Hz            │
                      └──────────┬───────────────────┘
                                 │
@@ -1450,7 +1450,7 @@ ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}
 
 #### Per-Joint Kp/Kd Configuration
 
-Each joint can have independently configured damping in zero-torque mode via `rs_a3_ros2_control.xacro`:
+Each joint can have independently configured damping in zero-torque mode via `el_a3_ros2_control.xacro`:
 
 ```xml
 <param name="zero_torque_kp_L1">0.0</param>
@@ -1496,14 +1496,14 @@ python3 scripts/inertia_calibration.py --combo --samples 50
 
 #### Calibration Workflow
 
-1. **Start controller**: `ros2 launch rs_a3_description rs_a3_control.launch.py`
+1. **Start controller**: `ros2 launch el_a3_description el_a3_control.launch.py`
 2. **Run calibration**: The program automatically moves the arm to test points for data collection
 3. **Wait for completion**: Parameters are saved and the arm returns to home position
 4. **Restart controller**: New parameters are loaded on restart
 
 #### Output File
 
-Results are saved in `rs_a3_description/config/inertia_params.yaml`:
+Results are saved in `el_a3_description/config/inertia_params.yaml`:
 
 ```yaml
 inertia_params:
@@ -1522,7 +1522,7 @@ calibration_info:
   r_squared: 0.9952       # Goodness of fit
 ```
 
-### Controller Parameters (`rs_a3_controllers.yaml`)
+### Controller Parameters (`el_a3_controllers.yaml`)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -1577,8 +1577,8 @@ calibration_info:
 
 | Service | Type | Description |
 |---------|------|-------------|
-| `/rs_a3/set_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable zero-torque mode (teaching) |
-| `/rs_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable pure zero-torque mode (master-slave teleop master arm) |
+| `/el_a3/set_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable zero-torque mode (teaching) |
+| `/el_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable pure zero-torque mode (master-slave teleop master arm) |
 | `/compute_ik` | `moveit_msgs/GetPositionIK` | Inverse kinematics solver |
 | `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` | Cartesian path planning |
 
@@ -1620,8 +1620,8 @@ Each control cycle sends the following parameters:
 |-----------|-------|-------------|
 | θ_target | ±12.57 rad | Target position |
 | ω_target | Per motor spec | Target velocity (feedforward, position differential) |
-| Kp | 0\~500 (RS00/RS05) | Position stiffness |
-| Kd | 0\~5 (RS00/RS05) | Damping coefficient |
+| Kp | 0\~500 (RS00/EL05) | Position stiffness |
+| Kd | 0\~5 (RS00/EL05) | Damping coefficient |
 | τ_ff | Per motor spec | Feedforward torque (gravity compensation) |
 
 ### Communication Types
@@ -1727,47 +1727,47 @@ The system employs a multi-level smoothing strategy:
 ## Directory Structure
 
 ```
-RS-A3/
+EL-A3/
 ├── README.md                              # This document
-├── rs_a3_description/                     # Robot description (URDF, config, launch)
+├── el_a3_description/                     # Robot description (URDF, config, launch)
 │   ├── urdf/
-│   │   ├── rs_a3.urdf.xacro              # URDF main file (xacro macros)
-│   │   ├── rs_a3.urdf                     # Compiled URDF
-│   │   └── rs_a3_ros2_control.xacro       # ros2_control hardware interface config
+│   │   ├── el_a3.urdf.xacro              # URDF main file (xacro macros)
+│   │   ├── el_a3.urdf                     # Compiled URDF
+│   │   └── el_a3_ros2_control.xacro       # ros2_control hardware interface config
 │   ├── config/
-│   │   ├── rs_a3_controllers.yaml         # Single-arm controller parameters
+│   │   ├── el_a3_controllers.yaml         # Single-arm controller parameters
 │   │   ├── multi_arm_controllers.yaml     # Multi-arm controller parameters
 │   │   ├── multi_arm_config.yaml          # Multi-arm CAN and namespace config
 │   │   ├── master_slave_config.yaml       # Master-slave teleop mapping config
 │   │   └── inertia_params.yaml            # Calibrated inertia parameters
 │   ├── launch/
-│   │   ├── rs_a3_control.launch.py        # Single-arm control launch
+│   │   ├── el_a3_control.launch.py        # Single-arm control launch
 │   │   └── multi_arm_control.launch.py    # Multi-arm control launch
 │   └── meshes/                            # 3D model files (STL)
 │
-├── rs_a3_hardware/                        # ROS2 Control hardware interface
-│   ├── include/rs_a3_hardware/
-│   │   ├── rs_a3_hardware.hpp             # Hardware interface header
+├── el_a3_hardware/                        # ROS2 Control hardware interface
+│   ├── include/el_a3_hardware/
+│   │   ├── el_a3_hardware.hpp             # Hardware interface header
 │   │   ├── robstride_can_driver.hpp       # CAN driver header
 │   │   └── s_curve_generator.hpp          # S-curve trajectory generator
 │   └── src/
-│       ├── rs_a3_hardware.cpp             # Hardware interface (Pinocchio gravity comp, zero-torque)
+│       ├── el_a3_hardware.cpp             # Hardware interface (Pinocchio gravity comp, zero-torque)
 │       ├── robstride_can_driver.cpp       # CAN communication driver
 │       └── s_curve_generator.cpp          # S-curve trajectory generator
 │
-├── rs_a3_moveit_config/                   # MoveIt2 motion planning config
+├── el_a3_moveit_config/                   # MoveIt2 motion planning config
 │   ├── config/                            # SRDF, kinematics, OMPL, joint limits
 │   └── launch/
 │       ├── demo.launch.py                 # Simulation demo
 │       └── robot.launch.py                # Real hardware + MoveIt
 │
 ├── ros2_ws/src/                           # ROS2 workspace (Python packages)
-│   ├── rs_a3_teleop/                      # Teleoperation package
+│   ├── el_a3_teleop/                      # Teleoperation package
 │   │   ├── config/                        # Xbox / Servo parameters
 │   │   ├── launch/                        # Real / Sim / Master-slave launch files
-│   │   └── rs_a3_teleop/                  # Node implementations
-│   ├── rs_a3_vision/                      # Vision grasping package
-│   └── rs_a3_web_ui/                      # Web visualization UI
+│   │   └── el_a3_teleop/                  # Node implementations
+│   ├── el_a3_vision/                      # Vision grasping package
+│   └── el_a3_web_ui/                      # Web visualization UI
 │
 ├── hardware/                              # Hardware design files
 │   ├── mechanical/                        # Mechanical structure models
@@ -1789,7 +1789,7 @@ RS-A3/
 │   └── ...                                # More test and setup scripts
 │
 ├── EDULITE-A3/                            # Original URDF export models (PART/STL)
-└── RS_A3_urdf/                            # Early URDF version
+└── EL_A3_urdf/                            # Early URDF version
 ```
 
 ---
@@ -1810,7 +1810,7 @@ RS-A3/
 
 ## Launch File Parameters
 
-### `rs_a3_teleop/real_teleop.launch.py`
+### `el_a3_teleop/real_teleop.launch.py`
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -1818,7 +1818,7 @@ RS-A3/
 | `host_can_id` | 253 | Host CAN ID |
 | `device` | /dev/input/js0 | Gamepad device path |
 
-### `rs_a3_moveit_config/robot.launch.py`
+### `el_a3_moveit_config/robot.launch.py`
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -1826,7 +1826,7 @@ RS-A3/
 | `host_can_id` | 253 | Host CAN ID |
 | `use_rviz` | true | Whether to launch RViz |
 
-### `rs_a3_moveit_config/demo.launch.py`
+### `el_a3_moveit_config/demo.launch.py`
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|

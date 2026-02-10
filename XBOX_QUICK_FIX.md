@@ -76,7 +76,7 @@ bash /home/wy/RS/A3/scripts/start_xbox_control.sh
 cd /home/wy/RS/A3/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch rs_a3_teleop simple_teleop.launch.py
+ros2 launch el_a3_teleop simple_teleop.launch.py
 ```
 
 ## 🧪 测试手柄

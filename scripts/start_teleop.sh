@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# RS-A3 Master-Slave Teleoperation Launch Script
+# EL-A3 Master-Slave Teleoperation Launch Script
 #
 # Features:
 # 1. Configure CAN interfaces (can0-can4)
@@ -44,7 +44,7 @@ print_error() {
 
 # Show help
 show_help() {
-    echo "RS-A3 Master-Slave Teleoperation Launch Script"
+    echo "EL-A3 Master-Slave Teleoperation Launch Script"
     echo ""
     echo "Usage: $0 [options]"
     echo ""
@@ -168,7 +168,7 @@ setup_all_can_interfaces() {
 # Main function
 main() {
     echo "============================================================"
-    echo "  RS-A3 Master-Slave Teleoperation"
+    echo "  EL-A3 Master-Slave Teleoperation"
     echo "============================================================"
     echo "  Master: $MASTER_CAN (zero-torque mode, Kd=$MASTER_KD)"
     echo "  Slaves: $SLAVE_CANS (position following, Kp=$SLAVE_KP, Kd=$SLAVE_KD)"

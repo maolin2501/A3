@@ -38,7 +38,7 @@ def load_calibration_data(filepath: str) -> dict:
 def print_text_report(data: dict):
     """打印文本报告"""
     print('\n' + '=' * 80)
-    print('  RS-A3 重力补偿标定结果分析报告')
+    print('  EL-A3 重力补偿标定结果分析报告')
     print('=' * 80)
     
     print(f'\n标定时间: {data.get("timestamp", "未知")}')
@@ -127,7 +127,7 @@ def plot_calibration_results(data: dict, save_path: str = None):
     n_rows = (n_plots + n_cols - 1) // n_cols
     
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
-    fig.suptitle('RS-A3 重力补偿标定结果', fontsize=14, fontweight='bold')
+    fig.suptitle('EL-A3 重力补偿标定结果', fontsize=14, fontweight='bold')
     
     # 确保 axes 是二维数组
     if n_plots == 1:

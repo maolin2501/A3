@@ -1,5 +1,5 @@
 #!/bin/bash
-# RS-A3 Web UI Startup Script
+# EL-A3 Web UI Startup Script
 
 # Colors
 GREEN='\033[0;32m'
@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║         RS-A3 Web Control Interface                       ║"
+echo "║         EL-A3 Web Control Interface                       ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -63,7 +63,7 @@ fi
 pip3 install flask flask-socketio eventlet python-socketio --quiet 2>/dev/null
 
 # Change to package directory
-cd "$WORKSPACE_DIR/ros2_ws/src/rs_a3_web_ui"
+cd "$WORKSPACE_DIR/ros2_ws/src/el_a3_web_ui"
 
 # Run the web server
-python3 -m rs_a3_web_ui.web_server --host "$HOST" --port "$PORT"
+python3 -m el_a3_web_ui.web_server --host "$HOST" --port "$PORT"

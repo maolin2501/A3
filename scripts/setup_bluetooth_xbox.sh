@@ -137,7 +137,7 @@ if [ -e /dev/input/js0 ]; then
     echo "3. Launch full control system:"
     echo "   cd /home/wy/RS/A3/ros2_ws"
     echo "   source install/setup.bash"
-    echo "   ros2 launch rs_a3_teleop simple_teleop.launch.py"
+    echo "   ros2 launch el_a3_teleop simple_teleop.launch.py"
 else
     echo -e "${YELLOW}⚠ Controller device is not ready${NC}"
     echo ""

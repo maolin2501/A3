@@ -105,7 +105,7 @@ echo ""
 sleep 3
 
 # Launch full system
-exec ros2 launch rs_a3_teleop simple_teleop.launch.py
+exec ros2 launch el_a3_teleop simple_teleop.launch.py
 
 
 
