@@ -1,6 +1,859 @@
+# EL-A3 Robotic Arm ROS2 Control System
+
+> **EL-A3** is a 6-DOF + Gripper desktop robotic arm built on ROS2 Control, driven by Robstride motors over CAN bus. It features S-curve trajectory planning, Pinocchio dynamics-based gravity compensation with automatic inertia calibration, and supports Xbox gamepad Cartesian teleoperation, master-slave teleoperation, gravity-compensated teach mode, MoveIt2 motion planning, and vision-based grasping — balancing motion smoothness with safety protection.
+
+## Table of Contents
+
+- [Introduction](#el-a3-robotic-arm-ros2-control-system)
+- [System Overview](#system-overview)
+- [Hardware Requirements](#hardware-requirements)
+- [Software Environment](#software-environment)
+- [Packages](#packages)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Control Parameters](#control-parameters)
+- [ROS2 Interfaces](#ros2-interfaces)
+- [Motor Communication Protocol](#motor-communication-protocol)
+- [Troubleshooting](#troubleshooting)
+- [Directory Structure](#directory-structure-1)
+- [中文版 (Chinese Version)](#el-a3-机械臂-ros2-控制系统)
+
+---
+
+## System Overview
+
+### Key Features
+
+- **S-Curve Trajectory Planning**: Standard 7-segment S-curve velocity profiling for smooth, jerk-free motion
+- **Pinocchio Dynamics Gravity Compensation**: Full dynamics model considering all joint cascading effects
+- **Automatic Inertia Calibration**: Multi-point sampling to fit link inertia parameters for precise teach mode
+- **Velocity Feedforward**: Position-differential velocity feedforward with low-pass filtering to reduce vibration
+- **Joint Limit Protection**: Soft-limit deceleration + hard-limit stop for safety
+- **Real-Time Cartesian Control**: 50 Hz Xbox gamepad Cartesian-space teleoperation
+- **MoveIt2 Integration**: Motion planning and obstacle avoidance
+- **Cartesian Velocity Mapping**: Joystick input directly mapped to end-effector velocity
+- **Multi-Level Smoothing**: Input smoothing + joint output smoothing + acceleration limiting to eliminate jitter
+- **Singularity Protection**: Automatic detection and rejection of IK solutions causing large jumps; auto-recovery after 50 consecutive rejections
+- **Collision Detection**: Self-collision and environment collision detection enabled on startup
+- **Home / Zero Return**: Precise control resumption from preset positions
+
+### Arm Specifications
+
+| Property | Specification |
+|----------|---------------|
+| DOF | 6 + Gripper |
+| End Effector | Customizable |
+| Protocol | Proprietary CAN 2.0 (29-bit extended ID) |
+| Baud Rate | 1 Mbps |
+| Control Mode | MIT-like PD Control |
+
+### Motor Configuration
+
+| Joint | Motor ID | Model | Torque Limit | Velocity Limit | Position Limit | Direction |
+|-------|----------|-------|-------------|----------------|----------------|-----------|
+| L1_joint | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
+| L2_joint | 2 | RS00 | ±14 Nm | ±33 rad/s | -0.17\~3.14 rad (-10°\~180°) | +1 |
+| L3_joint | 3 | RS00 | ±14 Nm | ±33 rad/s | -2.96\~0.17 rad (-170°\~10°) | -1 |
+| L4_joint | 4 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
+| L5_joint | 5 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
+| L6_joint | 6 | EL05 | ±6 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
+| Gripper | 7 | EL05 | ±0.4 Nm* | - | - | +1 |
+
+> *Gripper uses torque control mode, ±0.4 Nm controlled via D-pad up/down
+
+---
+
+## Hardware Requirements
+
+### Required
+
+- **EL-A3 Robotic Arm** (with 6 Robstride motors)
+- **CAN Adapter**: CANdle / gs_usb compatible device
+- **Power Supply**: 24V/48V DC (per motor specs)
+- **PC**: Ubuntu 22.04 x86_64
+
+### Optional
+
+- **Xbox Controller**: Wired or Bluetooth
+  - Xbox One Controller
+  - Xbox Series X|S Controller
+  - Other XInput-compatible gamepads
+
+---
+
+## Software Environment
+
+### System Requirements
+
+- **OS**: Ubuntu 22.04 LTS
+- **ROS**: ROS 2 Humble Hawksbill
+- **Kernel Module**: `gs_usb` (for CANdle adapter)
+
+### Dependency Installation
+
+```bash
+# One-click install
+cd scripts
+sudo ./install_deps.sh
+```
+
+Or install manually:
+
+```bash
+# ROS2 Control packages
+sudo apt install ros-humble-ros2-control \
+                 ros-humble-ros2-controllers \
+                 ros-humble-hardware-interface \
+                 ros-humble-controller-manager \
+                 ros-humble-joint-state-broadcaster \
+                 ros-humble-joint-trajectory-controller
+
+# MoveIt2 packages
+sudo apt install ros-humble-moveit \
+                 ros-humble-moveit-ros-move-group \
+                 ros-humble-moveit-ros-planning-interface \
+                 ros-humble-moveit-ros-visualization \
+                 ros-humble-moveit-planners-ompl \
+                 ros-humble-moveit-kinematics
+
+# Tools and other dependencies
+sudo apt install ros-humble-xacro \
+                 ros-humble-robot-state-publisher \
+                 ros-humble-joint-state-publisher-gui \
+                 ros-humble-rviz2 \
+                 ros-humble-joy \
+                 can-utils
+
+# Python dependencies
+pip3 install python-can scipy
+```
+
+### Xbox Bluetooth Driver (Optional)
+
+```bash
+cd scripts
+./install_xpadneo.sh
+```
+
+---
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| `el_a3_hardware` | ROS2 Control hardware interface with CAN communication driver |
+| `el_a3_description` | URDF robot description, ros2_control config, controller parameters |
+| `el_a3_moveit_config` | MoveIt2 motion planning configuration |
+| `el_a3_teleop` | Xbox gamepad real-time Cartesian-space control |
+
+---
+
+## Installation
+
+### 1. Clone / Copy Project
+
+```bash
+cd /path/to/EL-A3
+```
+
+### 2. Build Workspace
+
+```bash
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+### 3. Set Up CAN Interface
+
+```bash
+# After connecting the CAN adapter
+sudo ./scripts/setup_can.sh can0 1000000
+
+# Verify interface status
+ip link show can0
+candump can0
+```
+
+### 4. Configure Gamepad (Optional)
+
+**Wired**:
+```bash
+ls /dev/input/js*
+```
+
+**Bluetooth**:
+```bash
+./scripts/setup_bluetooth_xbox.sh
+```
+
+---
+
+## Quick Start
+
+### Xbox Gamepad Real-Time Control (Recommended)
+
+**Real Hardware**:
+```bash
+# Terminal 1: Set up CAN
+sudo ./scripts/setup_can.sh can0
+
+# Terminal 2: Launch control system
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
+```
+
+Or use the one-click script:
+```bash
+./scripts/start_real_xbox_control.sh can0
+```
+
+**Gamepad Control Mapping**:
+
+| Button / Stick | Function |
+|---------------|----------|
+| Left Stick Y | X-axis translation |
+| Left Stick X | Y-axis translation |
+| LT / RT | Z-axis up/down |
+| Right Stick X | Yaw rotation |
+| Right Stick Y | Pitch rotation |
+| LB / RB | Roll rotation |
+| A Button | Cycle speed gear (5 gears) |
+| B Button | Return to home position |
+| X Button | Return to zero position |
+| Y Button | Toggle gravity compensation mode (teach mode) |
+| Menu Button | Toggle master-slave teleop (can0 master / can1 slave) |
+| D-pad Up | Gripper close (+0.4 Nm) |
+| D-pad Down | Gripper open (-0.4 Nm) |
+
+**Speed Gears**:
+
+| Gear | Name | Linear Speed | Angular Speed |
+|------|------|-------------|---------------|
+| 1 | Ultra Slow | 25 mm/s | 0.25 rad/s |
+| 2 | Slow | 60 mm/s | 0.6 rad/s |
+| 3 | Medium | 120 mm/s | 1.2 rad/s |
+| 4 | Fast | 240 mm/s | 2.4 rad/s |
+| 5 | Ultra Fast | 600 mm/s | 6 rad/s |
+
+### Master-Slave Teleoperation Mode
+
+Press the Xbox Menu button to toggle between Cartesian control and master-slave teleoperation. In master-slave mode, the master arm on can0 enters pure zero-torque mode (Kp=0, Kd=0) for free-hand dragging, while the slave arm on can1 follows the master's joint positions in real-time via direct CAN MIT control, including Motor 7 (gripper).
+
+**Prerequisites**:
+- Both can0 and can1 interfaces are up
+- Master arm (can0) `ros2_control_node` is running
+- **Do NOT** run `ros2_control_node` for the slave arm (can1) — the slave is controlled directly via CAN
+
+**Launch**:
+```bash
+# 1. Set up CAN interfaces
+sudo ./scripts/setup_can.sh can0 1000000
+sudo ./scripts/setup_can.sh can1 1000000
+
+# 2. Launch control system (can0 only)
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
+
+# 3. Press Menu button to toggle master-slave mode
+```
+
+**Workflow**:
+
+1. **Press Menu to enable**:
+   - Master arm (can0) slowly returns to zero via MoveIt
+   - Slave arm (can1) returns to zero via CAN S-curve trajectory
+   - After zeroing, master enters pure zero-torque mode (free dragging)
+   - All 7 slave motors begin MIT position following
+
+2. **During master-slave following**:
+   - Master L1-L6: reads ROS2 `/joint_states` joint positions
+   - Slave L1-L6: follows via direct CAN MIT commands (with automatic direction mapping)
+   - Master Motor 7 (gripper): pure zero-torque mode (Kp=0, Kd=0)
+   - Slave Motor 7 (gripper): reads master CAN feedback position and follows
+
+3. **Press Menu again to disable**:
+   - Both arms slowly return to zero simultaneously
+   - After zeroing, slave motors are released (zero torque)
+   - Master arm resumes normal position control
+
+**Slave Arm Direct CAN Control Parameters**:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Kp | 80.0 | MIT position following stiffness |
+| Kd | 2.0 | MIT velocity damping |
+| Torque feedforward | 0.0 | No additional torque |
+| Control rate | 50 Hz | Synced with gamepad control loop |
+
+**Motor Direction Mapping** (joint frame → motor frame):
+
+| Motor | Joint | Direction |
+|-------|-------|-----------|
+| Motor 1 | L1_joint | -1.0 |
+| Motor 2 | L2_joint | +1.0 |
+| Motor 3 | L3_joint | -1.0 |
+| Motor 4 | L4_joint | +1.0 |
+| Motor 5 | L5_joint | -1.0 |
+| Motor 6 | L6_joint | +1.0 |
+| Motor 7 | Gripper | +1.0 |
+
+### Simulation Mode (MoveIt Demo)
+
+No real hardware needed — uses mock hardware:
+
+```bash
+ros2 launch el_a3_moveit_config demo.launch.py
+```
+
+### Simulation + Xbox Gamepad
+
+Test with simulated hardware and Xbox gamepad (no real arm required):
+
+```bash
+ros2 launch el_a3_teleop sim_teleop.launch.py
+```
+
+### Real Hardware + MoveIt
+
+```bash
+sudo ./scripts/setup_can.sh can0
+ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can0
+```
+
+### ros2_control Only (Without MoveIt)
+
+```bash
+ros2 launch el_a3_description el_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
+```
+
+---
+
+## Control Parameters
+
+### Hardware Interface Parameters (`el_a3_ros2_control.xacro`)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `can_interface` | can0 | CAN interface name |
+| `host_can_id` | 253 (0xFD) | Host CAN ID |
+| `position_kp` | 80.0 | Position PD control Kp gain |
+| `position_kd` | 4.0 | Position PD control Kd gain |
+| `velocity_limit` | 10.0 | Velocity limit (rad/s) |
+| `velocity_filter_alpha` | 0.1 | Velocity feedforward filter coefficient (0-1) |
+| `smoothing_alpha` | 0.08 | Low-pass filter coefficient (0-1) |
+| `max_velocity` | 2.0 | Maximum velocity limit (rad/s) |
+| `max_acceleration` | 8.0 | Maximum acceleration limit (rad/s²) |
+| `max_jerk` | 50.0 | Maximum jerk limit (rad/s³) — S-curve planning |
+| `s_curve_enabled` | true | Enable S-curve trajectory planning |
+| `gravity_feedforward_ratio` | 0.5 | Gravity compensation feedforward ratio (0-1) |
+| `limit_margin` | 0.15 | Joint limit deceleration zone (rad) |
+| `limit_stop_margin` | 0.02 | Joint limit hard-stop zone (rad) |
+| `can_frame_delay_us` | 50 | CAN frame send delay (μs) |
+
+**Default Gravity Compensation Coefficients**:
+
+| Joint | sin_coeff | Description |
+|-------|-----------|-------------|
+| L1 | 0.0 | Base rotation about Z-axis, no gravity effect |
+| L2 | 3.5 | Upper arm pitch, primary gravity load |
+| L3 | 2.0 | Forearm pitch |
+| L4 | 0.0 | Wrist Roll |
+| L5 | 0.3 | Wrist Pitch |
+| L6 | 0.0 | Wrist Yaw |
+
+Simplified gravity compensation formula: `τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio`
+
+### Gravity Compensation System
+
+The system uses a **dual-model architecture**: a simplified trigonometric model and a full Pinocchio RNEA dynamics model.
+
+#### Architecture Overview
+
+```
+                     ┌──────────────────────────────┐
+                     │    el_a3_hardware.cpp         │
+                     │    write() @ 200Hz            │
+                     └──────────┬───────────────────┘
+                                │
+                 ┌──────────────┼──────────────────┐
+                 │              │                   │
+          ┌──────▼──────┐  ┌───▼────────────┐  ┌──▼───────────────┐
+          │ Simplified   │  │ Pinocchio RNEA │  │  Zero-Torque     │
+          │ τ=A·sin+B·cos│  │ τ=RNEA(q,0,0) │  │  Kp=0, 100% comp│
+          │ +C (per joint)│  │ (cascading)   │  │  Teach/Teleop    │
+          └──────────────┘  └────────────────┘  └──────────────────┘
+```
+
+#### Model 1: Simplified Trigonometric Model
+
+Each joint computed independently, ignoring other joints' effects:
+
+```
+τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio
+```
+
+#### Model 2: Pinocchio RNEA Full Dynamics Model (Recommended)
+
+Uses Recursive Newton-Euler Algorithm (RNEA), considering all joint cascading effects:
+
+```
+τ_gravity = RNEA(model, data, q, v=0, a=0)
+```
+
+**Principle**: When velocity and acceleration are both zero, RNEA inverse dynamics output equals the gravity compensation torque for each joint. Pinocchio uses the URDF model for kinematic chain (DH parameters, link geometry), combined with calibrated inertia parameters (mass `m` and center of mass `c`), recursively computing gravity load from end-effector to base.
+
+**Parameters to Calibrate (12 total)**:
+
+| Link | Parameters | Description |
+|------|------------|-------------|
+| L2 | mass, com_x | Upper arm (2 params), primary load bearing |
+| L3 | mass, com_x, com_y | Forearm (3 params) |
+| L4 | mass, com_x, com_y | Wrist Roll (3 params) |
+| L5 | mass, com_z | Wrist Pitch (2 params) |
+| L6 | mass, com_z | End Yaw (2 params) |
+
+> L1 rotates about Z-axis, unaffected by gravity — no calibration needed.
+
+#### Control Mode Comparison
+
+| Mode | Kp | Kd | Velocity | Gravity Comp. | Use Case |
+|------|----|----|----------|---------------|----------|
+| Normal Position | 80.0 | 4.0 | Differential feedforward | 50% | Precise position tracking |
+| Zero-Torque (Gravity Comp.) | 0 | Per-joint | 0 | 100% | Gravity-compensated teaching |
+| Pure Zero-Torque | 0 | 0 | 0 | 0 | Master-slave teleop (master arm) |
+
+### Zero-Torque Mode (Teach Mode)
+
+In zero-torque mode, position control Kp=0, retaining only damping and gravity compensation, allowing manual guidance of the arm.
+
+#### ROS2 Service Interface
+
+| Service | Type | Description |
+|---------|------|-------------|
+| `/{ns}/set_zero_torque_mode` | `std_srvs/SetBool` | Gravity-compensated zero-torque mode (teaching) |
+| `/{ns}/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Pure zero-torque mode (master-slave teleop) |
+
+```bash
+# Enable zero-torque mode
+ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+
+# Enable pure zero-torque mode (for teleop master arm)
+ros2 service call /arm1/set_pure_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
+
+# Disable zero-torque mode
+ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
+```
+
+#### Per-Joint Kp/Kd Configuration
+
+Each joint can have independently configured damping in zero-torque mode via `el_a3_ros2_control.xacro`:
+
+```xml
+<param name="zero_torque_kp_L1">0.0</param>
+<param name="zero_torque_kd_L1">0.05</param>
+<param name="zero_torque_kd_L2">0.125</param>  <!-- Upper arm, higher damping -->
+<param name="zero_torque_kd_L3">0.15</param>
+<param name="zero_torque_kd_L4">0.15</param>
+<param name="zero_torque_kd_L5">0.02</param>
+<param name="zero_torque_kd_L6">0.02</param>
+```
+
+| Kd Range | Feel | Use Case |
+|----------|------|----------|
+| 0.02\~0.05 | Light, almost no resistance | Fine teaching, small joints |
+| 0.1\~0.15 | Moderate damping | General teaching |
+| 0.2\~0.5 | Noticeable resistance | Safety-first, large joints |
+
+### Inertia Parameter Calibration
+
+Automatic inertia calibration (`scripts/inertia_calibration.py`) uses the Pinocchio dynamics model to collect torque data at multiple joint configurations and fits link mass and center-of-mass parameters via least-squares optimization.
+
+#### Calibration Modes
+
+```bash
+# Full calibration L2-L6 (~46 points, ~10 min)
+python3 scripts/inertia_calibration.py
+
+# Quick calibration (~20 points, ~3 min)
+python3 scripts/inertia_calibration.py --quick
+
+# High-precision (~80 points, ~20 min)
+python3 scripts/inertia_calibration.py --high
+
+# Ultra-high-precision (~120 points, ~35 min)
+python3 scripts/inertia_calibration.py --ultra --samples 60
+
+# Wrist-only L4-L6 (preserves L2/L3)
+python3 scripts/inertia_calibration.py --wrist
+
+# L2-L5 combined (fixes L6 to URDF values)
+python3 scripts/inertia_calibration.py --combo --samples 50
+```
+
+#### Calibration Workflow
+
+1. **Start controller**: `ros2 launch el_a3_description el_a3_control.launch.py`
+2. **Run calibration**: The program automatically moves the arm to test points for data collection
+3. **Wait for completion**: Parameters are saved and the arm returns to home position
+4. **Restart controller**: New parameters are loaded on restart
+
+#### Output File
+
+Results are saved in `el_a3_description/config/inertia_params.yaml`:
+
+```yaml
+inertia_params:
+  L2:
+    mass: 0.9106         # Mass (kg)
+    com: [0.087, 0.0, 0.0]  # Center of mass (m)
+  L3:
+    mass: 0.3747
+    com: [-0.080, 0.033, 0.003]
+  # ... L4, L5, L6
+
+calibration_info:
+  date: "2026-02-04 18:59:19"
+  num_samples: 115
+  rmse: 0.0793            # Fitting error (Nm)
+  r_squared: 0.9952       # Goodness of fit
+```
+
+### Controller Parameters (`el_a3_controllers.yaml`)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `update_rate` | 200 Hz | Controller update rate |
+| `state_publish_rate` | 200 Hz | State publish rate |
+| `interpolation_method` | splines | Trajectory interpolation method |
+| `goal` | 0.03 rad | Goal position tolerance |
+
+### Xbox Teleop Parameters (`xbox_teleop.yaml`)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `update_rate` | 50.0 Hz | Control loop frequency |
+| `use_fast_ik_mode` | true | Use fast IK mode |
+| `max_linear_velocity` | 0.15 | Maximum linear velocity (m/s) |
+| `max_angular_velocity` | 1.5 | Maximum angular velocity (rad/s) |
+| `joint_smoothing_alpha` | 0.15 | Joint output smoothing coefficient (0-1) |
+| `max_joint_velocity` | 1.5 | Maximum single-joint velocity (rad/s) |
+| `max_joint_acceleration` | 5.0 | Maximum single-joint acceleration (rad/s²) |
+| `input_smoothing_factor` | 0.3 | Input smoothing filter coefficient |
+| `deadzone` | 0.15 | Joystick deadzone threshold |
+| `max_ik_jump_threshold` | 0.5 | Maximum allowed single-joint IK jump (rad) |
+| `enable_collision_check` | true | Enable collision detection |
+
+---
+
+## ROS2 Interfaces
+
+### Topics
+
+#### Published
+
+| Topic | Type | Rate | Description |
+|-------|------|------|-------------|
+| `/joint_states` | `sensor_msgs/JointState` | 200 Hz | Joint states (position/velocity/effort) |
+| `/robot_description` | `std_msgs/String` | latched | URDF description |
+| `/target_pose` | `geometry_msgs/PoseStamped` | 50 Hz | Target end-effector pose |
+| `/debug/ik_solution` | `sensor_msgs/JointState` | 50 Hz | IK solution debug info |
+| `/debug/hw_command` | `sensor_msgs/JointState` | 20 Hz | Command positions from controller |
+| `/debug/smoothed_command` | `sensor_msgs/JointState` | 20 Hz | Smoothed commands sent to motors |
+| `/debug/gravity_torque` | `sensor_msgs/JointState` | 20 Hz | Gravity compensation torques |
+| `/debug/motor_temperature` | `sensor_msgs/JointState` | 4 Hz | Motor temperature (°C) |
+
+#### Subscribed
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/joy` | `sensor_msgs/Joy` | Xbox gamepad input |
+| `/arm_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | Joint trajectory command |
+
+### Services
+
+| Service | Type | Description |
+|---------|------|-------------|
+| `/el_a3/set_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable zero-torque mode (teaching) |
+| `/el_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable pure zero-torque mode (master-slave teleop master arm) |
+| `/compute_ik` | `moveit_msgs/GetPositionIK` | Inverse kinematics solver |
+| `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` | Cartesian path planning |
+
+### Actions
+
+| Action | Type | Description |
+|--------|------|-------------|
+| `/arm_controller/follow_joint_trajectory` | `control_msgs/FollowJointTrajectory` | Joint trajectory execution |
+| `/move_action` | `moveit_msgs/MoveGroup` | MoveIt motion planning |
+
+### TF Frames
+
+```
+base_link
+├── L1_joint → l1_link_urdf_asm
+│   └── L2_joint → l2_l3_urdf_asm
+│       └── L3_joint → l3_lnik_urdf_asm
+│           └── L4_joint → l4_l5_urdf_asm
+│               └── L5_joint → part_9
+│                   └── L6_joint → l5_l6_urdf_asm
+│                       └── end_effector
+```
+
+---
+
+## Motor Communication Protocol
+
+The system communicates with motors via a proprietary protocol using **MIT-like control mode** for real-time control.
+
+### MIT-like Control Principle
+
+Each control cycle sends the following parameters:
+
+```
+τ = Kp × (θ_target - θ_actual) + Kd × (ω_target - ω_actual) + τ_ff
+```
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| θ_target | ±12.57 rad | Target position |
+| ω_target | Per motor spec | Target velocity (feedforward, position differential) |
+| Kp | 0\~500 (RS00/EL05) | Position stiffness |
+| Kd | 0\~5 (RS00/EL05) | Damping coefficient |
+| τ_ff | Per motor spec | Feedforward torque (gravity compensation) |
+
+### Communication Types
+
+| Type | Function | Description |
+|------|----------|-------------|
+| 1 | Control command | Send position/velocity/Kp/Kd/torque |
+| 2 | Motor feedback | Receive position/velocity/torque/temperature |
+| 3 | Motor enable | Start motor |
+| 4 | Motor stop | Stop motor |
+| 6 | Set zero position | Set current position as zero |
+| 18 | Parameter write | Write operating mode/position parameters |
+
+---
+
+## Troubleshooting
+
+### CAN Interface Issues
+
+```bash
+# Check USB devices
+lsusb | grep -i can
+
+# Load kernel modules
+sudo modprobe can
+sudo modprobe can_raw
+sudo modprobe gs_usb
+
+# Check interface
+ip link show type can
+
+# Restart interface
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+
+# Monitor CAN data
+candump can0
+```
+
+### Motor Not Responding
+
+1. Check CAN wiring and termination resistors
+2. Confirm motor ID configuration (1-6)
+3. Check power supply
+4. Monitor with `candump`
+5. Verify host CAN ID (default 253 / 0xFD)
+
+### Xbox Controller Issues
+
+```bash
+# Check gamepad device
+ls -la /dev/input/js*
+jstest /dev/input/js0
+
+# Check joy node
+ros2 topic echo /joy
+```
+
+### Build Errors
+
+```bash
+# Clean and rebuild
+cd ros2_ws
+rm -rf build install log
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+```
+
+### End-Effector Vibration
+
+1. Adjust `position_kp` and `position_kd` parameters
+2. Increase `smoothing_alpha` (smoother but slower response)
+3. Check joints for mechanical backlash
+4. Lower control frequency
+
+### Vibration Suppression
+
+The system employs a multi-level smoothing strategy:
+
+**1. Input Smoothing**
+- Parameter: `input_smoothing_factor` (default 0.3)
+- First-order low-pass filter on raw joystick input
+
+**2. Joint Output Smoothing**
+- Parameter: `joint_smoothing_alpha` (default 0.15)
+- Low-pass filter on IK solutions: `filtered = α × target + (1-α) × previous`
+
+**3. Velocity Limiting**
+- Parameter: `max_joint_velocity` (default 1.5 rad/s)
+- Limits maximum single-joint displacement per cycle
+
+**4. Acceleration Limiting**
+- Parameter: `max_joint_acceleration` (default 5.0 rad/s²)
+- Limits rate of velocity change for smooth acceleration/deceleration
+
+**5. Singularity Protection**
+- Parameter: `max_ik_jump_threshold` (default 0.5 rad)
+- Detects and rejects IK solutions causing large joint jumps
+
+---
+
+## Directory Structure
+
+```
+EL-A3/
+├── README.md                              # This document
+├── el_a3_description/                     # Robot description (URDF, config, launch)
+│   ├── urdf/
+│   │   ├── el_a3.urdf.xacro              # URDF main file (xacro macros)
+│   │   ├── el_a3.urdf                     # Compiled URDF
+│   │   └── el_a3_ros2_control.xacro       # ros2_control hardware interface config
+│   ├── config/
+│   │   ├── el_a3_controllers.yaml         # Single-arm controller parameters
+│   │   ├── multi_arm_controllers.yaml     # Multi-arm controller parameters
+│   │   ├── multi_arm_config.yaml          # Multi-arm CAN and namespace config
+│   │   ├── master_slave_config.yaml       # Master-slave teleop mapping config
+│   │   └── inertia_params.yaml            # Calibrated inertia parameters
+│   ├── launch/
+│   │   ├── el_a3_control.launch.py        # Single-arm control launch
+│   │   └── multi_arm_control.launch.py    # Multi-arm control launch
+│   └── meshes/                            # 3D model files (STL)
+│
+├── el_a3_hardware/                        # ROS2 Control hardware interface
+│   ├── include/el_a3_hardware/
+│   │   ├── el_a3_hardware.hpp             # Hardware interface header
+│   │   ├── robstride_can_driver.hpp       # CAN driver header
+│   │   └── s_curve_generator.hpp          # S-curve trajectory generator
+│   └── src/
+│       ├── el_a3_hardware.cpp             # Hardware interface (Pinocchio gravity comp, zero-torque)
+│       ├── robstride_can_driver.cpp       # CAN communication driver
+│       └── s_curve_generator.cpp          # S-curve trajectory generator
+│
+├── el_a3_moveit_config/                   # MoveIt2 motion planning config
+│   ├── config/                            # SRDF, kinematics, OMPL, joint limits
+│   └── launch/
+│       ├── demo.launch.py                 # Simulation demo
+│       └── robot.launch.py                # Real hardware + MoveIt
+│
+├── ros2_ws/src/                           # ROS2 workspace (Python packages)
+│   ├── el_a3_teleop/                      # Teleoperation package
+│   │   ├── config/                        # Xbox / Servo parameters
+│   │   ├── launch/                        # Real / Sim / Master-slave launch files
+│   │   └── el_a3_teleop/                  # Node implementations
+│   ├── el_a3_vision/                      # Vision grasping package
+│   └── el_a3_web_ui/                      # Web visualization UI
+│
+├── hardware/                              # Hardware design files
+│   ├── mechanical/                        # Mechanical structure models
+│   │   ├── step/                          # STEP format 3D models
+│   │   ├── stl/                           # STL mesh files
+│   │   └── drawings/                      # Engineering drawings (DXF/DWG/PDF)
+│   └── electronics/                       # PCB & circuit board files
+│       ├── schematic/                     # Schematics
+│       ├── pcb/                           # PCB layouts
+│       ├── gerber/                        # Gerber manufacturing files
+│       ├── bom/                           # Bill of Materials
+│       └── datasheet/                     # Component datasheets
+│
+├── scripts/                               # Utility scripts and calibration tools
+│   ├── inertia_calibration.py             # Pinocchio inertia calibration (recommended)
+│   ├── setup_can.sh                       # CAN interface setup
+│   ├── install_deps.sh                    # ROS2 dependency installation
+│   ├── start_real_xbox_control.sh         # One-click Xbox real hardware launch
+│   └── ...                                # More test and setup scripts
+│
+├── EDULITE-A3/                            # Original URDF export models (PART/STL)
+└── EL_A3_urdf/                            # Early URDF version
+```
+
+---
+
+## Script Reference
+
+| Script | Function | Usage |
+|--------|----------|-------|
+| `setup_can.sh` | Set up single CAN interface | `sudo ./setup_can.sh can0 1000000` |
+| `setup_multi_can.sh` | Batch set up multiple CAN interfaces | `sudo ./setup_multi_can.sh 4` |
+| `install_deps.sh` | Install ROS2 dependencies | `sudo ./install_deps.sh` |
+| `install_xpadneo.sh` | Install Xbox Bluetooth driver | `./install_xpadneo.sh` |
+| `start_real_xbox_control.sh` | One-click Xbox real hardware launch | `./start_real_xbox_control.sh can0` |
+| `inertia_calibration.py` | Pinocchio inertia calibration | `python3 inertia_calibration.py [--quick\|--high\|--ultra]` |
+| `move_to_zero.py` | Move arm to zero position | `python3 move_to_zero.py` |
+
+---
+
+## Launch File Parameters
+
+### `el_a3_teleop/real_teleop.launch.py`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `can_interface` | can0 | CAN interface name |
+| `host_can_id` | 253 | Host CAN ID |
+| `device` | /dev/input/js0 | Gamepad device path |
+
+### `el_a3_moveit_config/robot.launch.py`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `can_interface` | can0 | CAN interface name |
+| `host_can_id` | 253 | Host CAN ID |
+| `use_rviz` | true | Whether to launch RViz |
+
+### `el_a3_moveit_config/demo.launch.py`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `use_mock_hardware` | true | Use simulated hardware |
+| `use_rviz` | true | Whether to launch RViz |
+
+---
+
+## License
+
+Apache-2.0
+
+## Contact
+
+For questions, please contact the maintainer.
+
+---
+
+**Last Updated**: 2026-02-10
+
+<br>
+
 # EL-A3 机械臂 ROS2 控制系统
 
-> **EL-A3** 是一款 6 自由度桌面级机械臂，基于 ROS2 Control 构建，采用 CAN 总线驱动 Robstride 电机。具备 S 曲线轨迹规划、Pinocchio 动力学重力补偿与自动惯性标定能力，支持 Xbox 手柄笛卡尔遥操作、主从遥操作、拖动示教、MoveIt2 运动规划及视觉抓取，兼顾运动平滑性与安全保护。
+> **EL-A3** 是一款 6 自由度 + 夹爪桌面级机械臂，基于 ROS2 Control 构建，采用 CAN 总线驱动 Robstride 电机。具备 S 曲线轨迹规划、Pinocchio 动力学重力补偿与自动惯性标定能力，支持 Xbox 手柄笛卡尔遥操作、主从遥操作、拖动示教、MoveIt2 运动规划及视觉抓取，兼顾运动平滑性与安全保护。
 
 ## 📋 目录
 
@@ -16,7 +869,7 @@
 - [电机通信协议](#电机通信协议)
 - [故障排除](#故障排除)
 - [目录结构](#目录结构)
-- [English Version](#el-a3-robotic-arm-ros2-control-system-english)
+- [English Version](#el-a3-robotic-arm-ros2-control-system)
 
 ---
 
@@ -41,7 +894,7 @@
 
 | 属性 | 规格 |
 |------|------|
-| 自由度 | 6 DOF |
+| 自由度 | 6 DOF + 夹爪 |
 | 末端执行器 | 可定制 |
 | 通信协议 | 灵足时代私有协议 (CAN 2.0, 扩展帧29位ID) |
 | 波特率 | 1Mbps |
@@ -992,857 +1845,3 @@ Apache-2.0
 ---
 
 **最后更新 / Last Updated**: 2026-02-10
-
----
-
-<br>
-
-# EL-A3 Robotic Arm ROS2 Control System (English)
-
-> **EL-A3** is a 6-DOF desktop robotic arm built on ROS2 Control, driven by Robstride motors over CAN bus. It features S-curve trajectory planning, Pinocchio dynamics-based gravity compensation with automatic inertia calibration, and supports Xbox gamepad Cartesian teleoperation, master-slave teleoperation, gravity-compensated teach mode, MoveIt2 motion planning, and vision-based grasping — balancing motion smoothness with safety protection.
-
-## Table of Contents
-
-- [Introduction](#el-a3-robotic-arm-ros2-control-system-english)
-- [System Overview](#system-overview)
-- [Hardware Requirements](#hardware-requirements)
-- [Software Environment](#software-environment)
-- [Packages](#packages)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Control Parameters](#control-parameters)
-- [ROS2 Interfaces](#ros2-interfaces)
-- [Motor Communication Protocol](#motor-communication-protocol)
-- [Troubleshooting](#troubleshooting)
-- [Directory Structure](#directory-structure-1)
-
----
-
-## System Overview
-
-### Key Features
-
-- **S-Curve Trajectory Planning**: Standard 7-segment S-curve velocity profiling for smooth, jerk-free motion
-- **Pinocchio Dynamics Gravity Compensation**: Full dynamics model considering all joint cascading effects
-- **Automatic Inertia Calibration**: Multi-point sampling to fit link inertia parameters for precise teach mode
-- **Velocity Feedforward**: Position-differential velocity feedforward with low-pass filtering to reduce vibration
-- **Joint Limit Protection**: Soft-limit deceleration + hard-limit stop for safety
-- **Real-Time Cartesian Control**: 50 Hz Xbox gamepad Cartesian-space teleoperation
-- **MoveIt2 Integration**: Motion planning and obstacle avoidance
-- **Cartesian Velocity Mapping**: Joystick input directly mapped to end-effector velocity
-- **Multi-Level Smoothing**: Input smoothing + joint output smoothing + acceleration limiting to eliminate jitter
-- **Singularity Protection**: Automatic detection and rejection of IK solutions causing large jumps; auto-recovery after 50 consecutive rejections
-- **Collision Detection**: Self-collision and environment collision detection enabled on startup
-- **Home / Zero Return**: Precise control resumption from preset positions
-
-### Arm Specifications
-
-| Property | Specification |
-|----------|---------------|
-| DOF | 6 |
-| End Effector | Customizable |
-| Protocol | Proprietary CAN 2.0 (29-bit extended ID) |
-| Baud Rate | 1 Mbps |
-| Control Mode | MIT-like PD Control |
-
-### Motor Configuration
-
-| Joint | Motor ID | Model | Torque Limit | Velocity Limit | Position Limit | Direction |
-|-------|----------|-------|-------------|----------------|----------------|-----------|
-| L1_joint | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
-| L2_joint | 2 | RS00 | ±14 Nm | ±33 rad/s | -0.17\~3.14 rad (-10°\~180°) | +1 |
-| L3_joint | 3 | RS00 | ±14 Nm | ±33 rad/s | -2.96\~0.17 rad (-170°\~10°) | -1 |
-| L4_joint | 4 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | +1 |
-| L5_joint | 5 | EL05 | ±6 Nm | ±50 rad/s | ±1.75 rad (±100°) | -1 |
-| L6_joint | 6 | EL05 | ±6 Nm | ±50 rad/s | ±3.14 rad (±180°) | +1 |
-| Gripper | 7 | EL05 | ±0.4 Nm* | - | - | +1 |
-
-> *Gripper uses torque control mode, ±0.4 Nm controlled via D-pad up/down
-
----
-
-## Hardware Requirements
-
-### Required
-
-- **EL-A3 Robotic Arm** (with 6 Robstride motors)
-- **CAN Adapter**: CANdle / gs_usb compatible device
-- **Power Supply**: 24V/48V DC (per motor specs)
-- **PC**: Ubuntu 22.04 x86_64
-
-### Optional
-
-- **Xbox Controller**: Wired or Bluetooth
-  - Xbox One Controller
-  - Xbox Series X|S Controller
-  - Other XInput-compatible gamepads
-
----
-
-## Software Environment
-
-### System Requirements
-
-- **OS**: Ubuntu 22.04 LTS
-- **ROS**: ROS 2 Humble Hawksbill
-- **Kernel Module**: `gs_usb` (for CANdle adapter)
-
-### Dependency Installation
-
-```bash
-# One-click install
-cd scripts
-sudo ./install_deps.sh
-```
-
-Or install manually:
-
-```bash
-# ROS2 Control packages
-sudo apt install ros-humble-ros2-control \
-                 ros-humble-ros2-controllers \
-                 ros-humble-hardware-interface \
-                 ros-humble-controller-manager \
-                 ros-humble-joint-state-broadcaster \
-                 ros-humble-joint-trajectory-controller
-
-# MoveIt2 packages
-sudo apt install ros-humble-moveit \
-                 ros-humble-moveit-ros-move-group \
-                 ros-humble-moveit-ros-planning-interface \
-                 ros-humble-moveit-ros-visualization \
-                 ros-humble-moveit-planners-ompl \
-                 ros-humble-moveit-kinematics
-
-# Tools and other dependencies
-sudo apt install ros-humble-xacro \
-                 ros-humble-robot-state-publisher \
-                 ros-humble-joint-state-publisher-gui \
-                 ros-humble-rviz2 \
-                 ros-humble-joy \
-                 can-utils
-
-# Python dependencies
-pip3 install python-can scipy
-```
-
-### Xbox Bluetooth Driver (Optional)
-
-```bash
-cd scripts
-./install_xpadneo.sh
-```
-
----
-
-## Packages
-
-| Package | Description |
-|---------|-------------|
-| `el_a3_hardware` | ROS2 Control hardware interface with CAN communication driver |
-| `el_a3_description` | URDF robot description, ros2_control config, controller parameters |
-| `el_a3_moveit_config` | MoveIt2 motion planning configuration |
-| `el_a3_teleop` | Xbox gamepad real-time Cartesian-space control |
-
----
-
-## Installation
-
-### 1. Clone / Copy Project
-
-```bash
-cd /path/to/EL-A3
-```
-
-### 2. Build Workspace
-
-```bash
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-```
-
-### 3. Set Up CAN Interface
-
-```bash
-# After connecting the CAN adapter
-sudo ./scripts/setup_can.sh can0 1000000
-
-# Verify interface status
-ip link show can0
-candump can0
-```
-
-### 4. Configure Gamepad (Optional)
-
-**Wired**:
-```bash
-ls /dev/input/js*
-```
-
-**Bluetooth**:
-```bash
-./scripts/setup_bluetooth_xbox.sh
-```
-
----
-
-## Quick Start
-
-### Xbox Gamepad Real-Time Control (Recommended)
-
-**Real Hardware**:
-```bash
-# Terminal 1: Set up CAN
-sudo ./scripts/setup_can.sh can0
-
-# Terminal 2: Launch control system
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
-```
-
-Or use the one-click script:
-```bash
-./scripts/start_real_xbox_control.sh can0
-```
-
-**Gamepad Control Mapping**:
-
-| Button / Stick | Function |
-|---------------|----------|
-| Left Stick Y | X-axis translation |
-| Left Stick X | Y-axis translation |
-| LT / RT | Z-axis up/down |
-| Right Stick X | Yaw rotation |
-| Right Stick Y | Pitch rotation |
-| LB / RB | Roll rotation |
-| A Button | Cycle speed gear (5 gears) |
-| B Button | Return to home position |
-| X Button | Return to zero position |
-| Y Button | Toggle gravity compensation mode (teach mode) |
-| Menu Button | Toggle master-slave teleop (can0 master / can1 slave) |
-| D-pad Up | Gripper close (+0.4 Nm) |
-| D-pad Down | Gripper open (-0.4 Nm) |
-
-**Speed Gears**:
-
-| Gear | Name | Linear Speed | Angular Speed |
-|------|------|-------------|---------------|
-| 1 | Ultra Slow | 25 mm/s | 0.25 rad/s |
-| 2 | Slow | 60 mm/s | 0.6 rad/s |
-| 3 | Medium | 120 mm/s | 1.2 rad/s |
-| 4 | Fast | 240 mm/s | 2.4 rad/s |
-| 5 | Ultra Fast | 600 mm/s | 6 rad/s |
-
-### Master-Slave Teleoperation Mode
-
-Press the Xbox Menu button to toggle between Cartesian control and master-slave teleoperation. In master-slave mode, the master arm on can0 enters pure zero-torque mode (Kp=0, Kd=0) for free-hand dragging, while the slave arm on can1 follows the master's joint positions in real-time via direct CAN MIT control, including Motor 7 (gripper).
-
-**Prerequisites**:
-- Both can0 and can1 interfaces are up
-- Master arm (can0) `ros2_control_node` is running
-- **Do NOT** run `ros2_control_node` for the slave arm (can1) — the slave is controlled directly via CAN
-
-**Launch**:
-```bash
-# 1. Set up CAN interfaces
-sudo ./scripts/setup_can.sh can0 1000000
-sudo ./scripts/setup_can.sh can1 1000000
-
-# 2. Launch control system (can0 only)
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
-
-# 3. Press Menu button to toggle master-slave mode
-```
-
-**Workflow**:
-
-1. **Press Menu to enable**:
-   - Master arm (can0) slowly returns to zero via MoveIt
-   - Slave arm (can1) returns to zero via CAN S-curve trajectory
-   - After zeroing, master enters pure zero-torque mode (free dragging)
-   - All 7 slave motors begin MIT position following
-
-2. **During master-slave following**:
-   - Master L1-L6: reads ROS2 `/joint_states` joint positions
-   - Slave L1-L6: follows via direct CAN MIT commands (with automatic direction mapping)
-   - Master Motor 7 (gripper): pure zero-torque mode (Kp=0, Kd=0)
-   - Slave Motor 7 (gripper): reads master CAN feedback position and follows
-
-3. **Press Menu again to disable**:
-   - Both arms slowly return to zero simultaneously
-   - After zeroing, slave motors are released (zero torque)
-   - Master arm resumes normal position control
-
-**Slave Arm Direct CAN Control Parameters**:
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Kp | 80.0 | MIT position following stiffness |
-| Kd | 2.0 | MIT velocity damping |
-| Torque feedforward | 0.0 | No additional torque |
-| Control rate | 50 Hz | Synced with gamepad control loop |
-
-**Motor Direction Mapping** (joint frame → motor frame):
-
-| Motor | Joint | Direction |
-|-------|-------|-----------|
-| Motor 1 | L1_joint | -1.0 |
-| Motor 2 | L2_joint | +1.0 |
-| Motor 3 | L3_joint | -1.0 |
-| Motor 4 | L4_joint | +1.0 |
-| Motor 5 | L5_joint | -1.0 |
-| Motor 6 | L6_joint | +1.0 |
-| Motor 7 | Gripper | +1.0 |
-
-### Simulation Mode (MoveIt Demo)
-
-No real hardware needed — uses mock hardware:
-
-```bash
-ros2 launch el_a3_moveit_config demo.launch.py
-```
-
-### Simulation + Xbox Gamepad
-
-Test with simulated hardware and Xbox gamepad (no real arm required):
-
-```bash
-ros2 launch el_a3_teleop sim_teleop.launch.py
-```
-
-### Real Hardware + MoveIt
-
-```bash
-sudo ./scripts/setup_can.sh can0
-ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can0
-```
-
-### ros2_control Only (Without MoveIt)
-
-```bash
-ros2 launch el_a3_description el_a3_control.launch.py use_mock_hardware:=false can_interface:=can0
-```
-
----
-
-## Control Parameters
-
-### Hardware Interface Parameters (`el_a3_ros2_control.xacro`)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `can_interface` | can0 | CAN interface name |
-| `host_can_id` | 253 (0xFD) | Host CAN ID |
-| `position_kp` | 80.0 | Position PD control Kp gain |
-| `position_kd` | 4.0 | Position PD control Kd gain |
-| `velocity_limit` | 10.0 | Velocity limit (rad/s) |
-| `velocity_filter_alpha` | 0.1 | Velocity feedforward filter coefficient (0-1) |
-| `smoothing_alpha` | 0.08 | Low-pass filter coefficient (0-1) |
-| `max_velocity` | 2.0 | Maximum velocity limit (rad/s) |
-| `max_acceleration` | 8.0 | Maximum acceleration limit (rad/s²) |
-| `max_jerk` | 50.0 | Maximum jerk limit (rad/s³) — S-curve planning |
-| `s_curve_enabled` | true | Enable S-curve trajectory planning |
-| `gravity_feedforward_ratio` | 0.5 | Gravity compensation feedforward ratio (0-1) |
-| `limit_margin` | 0.15 | Joint limit deceleration zone (rad) |
-| `limit_stop_margin` | 0.02 | Joint limit hard-stop zone (rad) |
-| `can_frame_delay_us` | 50 | CAN frame send delay (μs) |
-
-**Default Gravity Compensation Coefficients**:
-
-| Joint | sin_coeff | Description |
-|-------|-----------|-------------|
-| L1 | 0.0 | Base rotation about Z-axis, no gravity effect |
-| L2 | 3.5 | Upper arm pitch, primary gravity load |
-| L3 | 2.0 | Forearm pitch |
-| L4 | 0.0 | Wrist Roll |
-| L5 | 0.3 | Wrist Pitch |
-| L6 | 0.0 | Wrist Yaw |
-
-Simplified gravity compensation formula: `τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio`
-
-### Gravity Compensation System
-
-The system uses a **dual-model architecture**: a simplified trigonometric model and a full Pinocchio RNEA dynamics model.
-
-#### Architecture Overview
-
-```
-                     ┌──────────────────────────────┐
-                     │    el_a3_hardware.cpp         │
-                     │    write() @ 200Hz            │
-                     └──────────┬───────────────────┘
-                                │
-                 ┌──────────────┼──────────────────┐
-                 │              │                   │
-          ┌──────▼──────┐  ┌───▼────────────┐  ┌──▼───────────────┐
-          │ Simplified   │  │ Pinocchio RNEA │  │  Zero-Torque     │
-          │ τ=A·sin+B·cos│  │ τ=RNEA(q,0,0) │  │  Kp=0, 100% comp│
-          │ +C (per joint)│  │ (cascading)   │  │  Teach/Teleop    │
-          └──────────────┘  └────────────────┘  └──────────────────┘
-```
-
-#### Model 1: Simplified Trigonometric Model
-
-Each joint computed independently, ignoring other joints' effects:
-
-```
-τ_ff = (sin_coeff × sin(θ) + cos_coeff × cos(θ) + offset) × gravity_feedforward_ratio
-```
-
-#### Model 2: Pinocchio RNEA Full Dynamics Model (Recommended)
-
-Uses Recursive Newton-Euler Algorithm (RNEA), considering all joint cascading effects:
-
-```
-τ_gravity = RNEA(model, data, q, v=0, a=0)
-```
-
-**Principle**: When velocity and acceleration are both zero, RNEA inverse dynamics output equals the gravity compensation torque for each joint. Pinocchio uses the URDF model for kinematic chain (DH parameters, link geometry), combined with calibrated inertia parameters (mass `m` and center of mass `c`), recursively computing gravity load from end-effector to base.
-
-**Parameters to Calibrate (12 total)**:
-
-| Link | Parameters | Description |
-|------|------------|-------------|
-| L2 | mass, com_x | Upper arm (2 params), primary load bearing |
-| L3 | mass, com_x, com_y | Forearm (3 params) |
-| L4 | mass, com_x, com_y | Wrist Roll (3 params) |
-| L5 | mass, com_z | Wrist Pitch (2 params) |
-| L6 | mass, com_z | End Yaw (2 params) |
-
-> L1 rotates about Z-axis, unaffected by gravity — no calibration needed.
-
-#### Control Mode Comparison
-
-| Mode | Kp | Kd | Velocity | Gravity Comp. | Use Case |
-|------|----|----|----------|---------------|----------|
-| Normal Position | 80.0 | 4.0 | Differential feedforward | 50% | Precise position tracking |
-| Zero-Torque (Gravity Comp.) | 0 | Per-joint | 0 | 100% | Gravity-compensated teaching |
-| Pure Zero-Torque | 0 | 0 | 0 | 0 | Master-slave teleop (master arm) |
-
-### Zero-Torque Mode (Teach Mode)
-
-In zero-torque mode, position control Kp=0, retaining only damping and gravity compensation, allowing manual guidance of the arm.
-
-#### ROS2 Service Interface
-
-| Service | Type | Description |
-|---------|------|-------------|
-| `/{ns}/set_zero_torque_mode` | `std_srvs/SetBool` | Gravity-compensated zero-torque mode (teaching) |
-| `/{ns}/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Pure zero-torque mode (master-slave teleop) |
-
-```bash
-# Enable zero-torque mode
-ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
-
-# Enable pure zero-torque mode (for teleop master arm)
-ros2 service call /arm1/set_pure_zero_torque_mode std_srvs/srv/SetBool "{data: true}"
-
-# Disable zero-torque mode
-ros2 service call /arm1/set_zero_torque_mode std_srvs/srv/SetBool "{data: false}"
-```
-
-#### Per-Joint Kp/Kd Configuration
-
-Each joint can have independently configured damping in zero-torque mode via `el_a3_ros2_control.xacro`:
-
-```xml
-<param name="zero_torque_kp_L1">0.0</param>
-<param name="zero_torque_kd_L1">0.05</param>
-<param name="zero_torque_kd_L2">0.125</param>  <!-- Upper arm, higher damping -->
-<param name="zero_torque_kd_L3">0.15</param>
-<param name="zero_torque_kd_L4">0.15</param>
-<param name="zero_torque_kd_L5">0.02</param>
-<param name="zero_torque_kd_L6">0.02</param>
-```
-
-| Kd Range | Feel | Use Case |
-|----------|------|----------|
-| 0.02\~0.05 | Light, almost no resistance | Fine teaching, small joints |
-| 0.1\~0.15 | Moderate damping | General teaching |
-| 0.2\~0.5 | Noticeable resistance | Safety-first, large joints |
-
-### Inertia Parameter Calibration
-
-Automatic inertia calibration (`scripts/inertia_calibration.py`) uses the Pinocchio dynamics model to collect torque data at multiple joint configurations and fits link mass and center-of-mass parameters via least-squares optimization.
-
-#### Calibration Modes
-
-```bash
-# Full calibration L2-L6 (~46 points, ~10 min)
-python3 scripts/inertia_calibration.py
-
-# Quick calibration (~20 points, ~3 min)
-python3 scripts/inertia_calibration.py --quick
-
-# High-precision (~80 points, ~20 min)
-python3 scripts/inertia_calibration.py --high
-
-# Ultra-high-precision (~120 points, ~35 min)
-python3 scripts/inertia_calibration.py --ultra --samples 60
-
-# Wrist-only L4-L6 (preserves L2/L3)
-python3 scripts/inertia_calibration.py --wrist
-
-# L2-L5 combined (fixes L6 to URDF values)
-python3 scripts/inertia_calibration.py --combo --samples 50
-```
-
-#### Calibration Workflow
-
-1. **Start controller**: `ros2 launch el_a3_description el_a3_control.launch.py`
-2. **Run calibration**: The program automatically moves the arm to test points for data collection
-3. **Wait for completion**: Parameters are saved and the arm returns to home position
-4. **Restart controller**: New parameters are loaded on restart
-
-#### Output File
-
-Results are saved in `el_a3_description/config/inertia_params.yaml`:
-
-```yaml
-inertia_params:
-  L2:
-    mass: 0.9106         # Mass (kg)
-    com: [0.087, 0.0, 0.0]  # Center of mass (m)
-  L3:
-    mass: 0.3747
-    com: [-0.080, 0.033, 0.003]
-  # ... L4, L5, L6
-
-calibration_info:
-  date: "2026-02-04 18:59:19"
-  num_samples: 115
-  rmse: 0.0793            # Fitting error (Nm)
-  r_squared: 0.9952       # Goodness of fit
-```
-
-### Controller Parameters (`el_a3_controllers.yaml`)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `update_rate` | 200 Hz | Controller update rate |
-| `state_publish_rate` | 200 Hz | State publish rate |
-| `interpolation_method` | splines | Trajectory interpolation method |
-| `goal` | 0.03 rad | Goal position tolerance |
-
-### Xbox Teleop Parameters (`xbox_teleop.yaml`)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `update_rate` | 50.0 Hz | Control loop frequency |
-| `use_fast_ik_mode` | true | Use fast IK mode |
-| `max_linear_velocity` | 0.15 | Maximum linear velocity (m/s) |
-| `max_angular_velocity` | 1.5 | Maximum angular velocity (rad/s) |
-| `joint_smoothing_alpha` | 0.15 | Joint output smoothing coefficient (0-1) |
-| `max_joint_velocity` | 1.5 | Maximum single-joint velocity (rad/s) |
-| `max_joint_acceleration` | 5.0 | Maximum single-joint acceleration (rad/s²) |
-| `input_smoothing_factor` | 0.3 | Input smoothing filter coefficient |
-| `deadzone` | 0.15 | Joystick deadzone threshold |
-| `max_ik_jump_threshold` | 0.5 | Maximum allowed single-joint IK jump (rad) |
-| `enable_collision_check` | true | Enable collision detection |
-
----
-
-## ROS2 Interfaces
-
-### Topics
-
-#### Published
-
-| Topic | Type | Rate | Description |
-|-------|------|------|-------------|
-| `/joint_states` | `sensor_msgs/JointState` | 200 Hz | Joint states (position/velocity/effort) |
-| `/robot_description` | `std_msgs/String` | latched | URDF description |
-| `/target_pose` | `geometry_msgs/PoseStamped` | 50 Hz | Target end-effector pose |
-| `/debug/ik_solution` | `sensor_msgs/JointState` | 50 Hz | IK solution debug info |
-| `/debug/hw_command` | `sensor_msgs/JointState` | 20 Hz | Command positions from controller |
-| `/debug/smoothed_command` | `sensor_msgs/JointState` | 20 Hz | Smoothed commands sent to motors |
-| `/debug/gravity_torque` | `sensor_msgs/JointState` | 20 Hz | Gravity compensation torques |
-| `/debug/motor_temperature` | `sensor_msgs/JointState` | 4 Hz | Motor temperature (°C) |
-
-#### Subscribed
-
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/joy` | `sensor_msgs/Joy` | Xbox gamepad input |
-| `/arm_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | Joint trajectory command |
-
-### Services
-
-| Service | Type | Description |
-|---------|------|-------------|
-| `/el_a3/set_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable zero-torque mode (teaching) |
-| `/el_a3/set_pure_zero_torque_mode` | `std_srvs/SetBool` | Enable/disable pure zero-torque mode (master-slave teleop master arm) |
-| `/compute_ik` | `moveit_msgs/GetPositionIK` | Inverse kinematics solver |
-| `/compute_cartesian_path` | `moveit_msgs/GetCartesianPath` | Cartesian path planning |
-
-### Actions
-
-| Action | Type | Description |
-|--------|------|-------------|
-| `/arm_controller/follow_joint_trajectory` | `control_msgs/FollowJointTrajectory` | Joint trajectory execution |
-| `/move_action` | `moveit_msgs/MoveGroup` | MoveIt motion planning |
-
-### TF Frames
-
-```
-base_link
-├── L1_joint → l1_link_urdf_asm
-│   └── L2_joint → l2_l3_urdf_asm
-│       └── L3_joint → l3_lnik_urdf_asm
-│           └── L4_joint → l4_l5_urdf_asm
-│               └── L5_joint → part_9
-│                   └── L6_joint → l5_l6_urdf_asm
-│                       └── end_effector
-```
-
----
-
-## Motor Communication Protocol
-
-The system communicates with motors via a proprietary protocol using **MIT-like control mode** for real-time control.
-
-### MIT-like Control Principle
-
-Each control cycle sends the following parameters:
-
-```
-τ = Kp × (θ_target - θ_actual) + Kd × (ω_target - ω_actual) + τ_ff
-```
-
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| θ_target | ±12.57 rad | Target position |
-| ω_target | Per motor spec | Target velocity (feedforward, position differential) |
-| Kp | 0\~500 (RS00/EL05) | Position stiffness |
-| Kd | 0\~5 (RS00/EL05) | Damping coefficient |
-| τ_ff | Per motor spec | Feedforward torque (gravity compensation) |
-
-### Communication Types
-
-| Type | Function | Description |
-|------|----------|-------------|
-| 1 | Control command | Send position/velocity/Kp/Kd/torque |
-| 2 | Motor feedback | Receive position/velocity/torque/temperature |
-| 3 | Motor enable | Start motor |
-| 4 | Motor stop | Stop motor |
-| 6 | Set zero position | Set current position as zero |
-| 18 | Parameter write | Write operating mode/position parameters |
-
----
-
-## Troubleshooting
-
-### CAN Interface Issues
-
-```bash
-# Check USB devices
-lsusb | grep -i can
-
-# Load kernel modules
-sudo modprobe can
-sudo modprobe can_raw
-sudo modprobe gs_usb
-
-# Check interface
-ip link show type can
-
-# Restart interface
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 1000000
-sudo ip link set can0 up
-
-# Monitor CAN data
-candump can0
-```
-
-### Motor Not Responding
-
-1. Check CAN wiring and termination resistors
-2. Confirm motor ID configuration (1-6)
-3. Check power supply
-4. Monitor with `candump`
-5. Verify host CAN ID (default 253 / 0xFD)
-
-### Xbox Controller Issues
-
-```bash
-# Check gamepad device
-ls -la /dev/input/js*
-jstest /dev/input/js0
-
-# Check joy node
-ros2 topic echo /joy
-```
-
-### Build Errors
-
-```bash
-# Clean and rebuild
-cd ros2_ws
-rm -rf build install log
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-```
-
-### End-Effector Vibration
-
-1. Adjust `position_kp` and `position_kd` parameters
-2. Increase `smoothing_alpha` (smoother but slower response)
-3. Check joints for mechanical backlash
-4. Lower control frequency
-
-### Vibration Suppression
-
-The system employs a multi-level smoothing strategy:
-
-**1. Input Smoothing**
-- Parameter: `input_smoothing_factor` (default 0.3)
-- First-order low-pass filter on raw joystick input
-
-**2. Joint Output Smoothing**
-- Parameter: `joint_smoothing_alpha` (default 0.15)
-- Low-pass filter on IK solutions: `filtered = α × target + (1-α) × previous`
-
-**3. Velocity Limiting**
-- Parameter: `max_joint_velocity` (default 1.5 rad/s)
-- Limits maximum single-joint displacement per cycle
-
-**4. Acceleration Limiting**
-- Parameter: `max_joint_acceleration` (default 5.0 rad/s²)
-- Limits rate of velocity change for smooth acceleration/deceleration
-
-**5. Singularity Protection**
-- Parameter: `max_ik_jump_threshold` (default 0.5 rad)
-- Detects and rejects IK solutions causing large joint jumps
-
----
-
-## Directory Structure
-
-```
-EL-A3/
-├── README.md                              # This document
-├── el_a3_description/                     # Robot description (URDF, config, launch)
-│   ├── urdf/
-│   │   ├── el_a3.urdf.xacro              # URDF main file (xacro macros)
-│   │   ├── el_a3.urdf                     # Compiled URDF
-│   │   └── el_a3_ros2_control.xacro       # ros2_control hardware interface config
-│   ├── config/
-│   │   ├── el_a3_controllers.yaml         # Single-arm controller parameters
-│   │   ├── multi_arm_controllers.yaml     # Multi-arm controller parameters
-│   │   ├── multi_arm_config.yaml          # Multi-arm CAN and namespace config
-│   │   ├── master_slave_config.yaml       # Master-slave teleop mapping config
-│   │   └── inertia_params.yaml            # Calibrated inertia parameters
-│   ├── launch/
-│   │   ├── el_a3_control.launch.py        # Single-arm control launch
-│   │   └── multi_arm_control.launch.py    # Multi-arm control launch
-│   └── meshes/                            # 3D model files (STL)
-│
-├── el_a3_hardware/                        # ROS2 Control hardware interface
-│   ├── include/el_a3_hardware/
-│   │   ├── el_a3_hardware.hpp             # Hardware interface header
-│   │   ├── robstride_can_driver.hpp       # CAN driver header
-│   │   └── s_curve_generator.hpp          # S-curve trajectory generator
-│   └── src/
-│       ├── el_a3_hardware.cpp             # Hardware interface (Pinocchio gravity comp, zero-torque)
-│       ├── robstride_can_driver.cpp       # CAN communication driver
-│       └── s_curve_generator.cpp          # S-curve trajectory generator
-│
-├── el_a3_moveit_config/                   # MoveIt2 motion planning config
-│   ├── config/                            # SRDF, kinematics, OMPL, joint limits
-│   └── launch/
-│       ├── demo.launch.py                 # Simulation demo
-│       └── robot.launch.py                # Real hardware + MoveIt
-│
-├── ros2_ws/src/                           # ROS2 workspace (Python packages)
-│   ├── el_a3_teleop/                      # Teleoperation package
-│   │   ├── config/                        # Xbox / Servo parameters
-│   │   ├── launch/                        # Real / Sim / Master-slave launch files
-│   │   └── el_a3_teleop/                  # Node implementations
-│   ├── el_a3_vision/                      # Vision grasping package
-│   └── el_a3_web_ui/                      # Web visualization UI
-│
-├── hardware/                              # Hardware design files
-│   ├── mechanical/                        # Mechanical structure models
-│   │   ├── step/                          # STEP format 3D models
-│   │   ├── stl/                           # STL mesh files
-│   │   └── drawings/                      # Engineering drawings (DXF/DWG/PDF)
-│   └── electronics/                       # PCB & circuit board files
-│       ├── schematic/                     # Schematics
-│       ├── pcb/                           # PCB layouts
-│       ├── gerber/                        # Gerber manufacturing files
-│       ├── bom/                           # Bill of Materials
-│       └── datasheet/                     # Component datasheets
-│
-├── scripts/                               # Utility scripts and calibration tools
-│   ├── inertia_calibration.py             # Pinocchio inertia calibration (recommended)
-│   ├── setup_can.sh                       # CAN interface setup
-│   ├── install_deps.sh                    # ROS2 dependency installation
-│   ├── start_real_xbox_control.sh         # One-click Xbox real hardware launch
-│   └── ...                                # More test and setup scripts
-│
-├── EDULITE-A3/                            # Original URDF export models (PART/STL)
-└── EL_A3_urdf/                            # Early URDF version
-```
-
----
-
-## Script Reference
-
-| Script | Function | Usage |
-|--------|----------|-------|
-| `setup_can.sh` | Set up single CAN interface | `sudo ./setup_can.sh can0 1000000` |
-| `setup_multi_can.sh` | Batch set up multiple CAN interfaces | `sudo ./setup_multi_can.sh 4` |
-| `install_deps.sh` | Install ROS2 dependencies | `sudo ./install_deps.sh` |
-| `install_xpadneo.sh` | Install Xbox Bluetooth driver | `./install_xpadneo.sh` |
-| `start_real_xbox_control.sh` | One-click Xbox real hardware launch | `./start_real_xbox_control.sh can0` |
-| `inertia_calibration.py` | Pinocchio inertia calibration | `python3 inertia_calibration.py [--quick\|--high\|--ultra]` |
-| `move_to_zero.py` | Move arm to zero position | `python3 move_to_zero.py` |
-
----
-
-## Launch File Parameters
-
-### `el_a3_teleop/real_teleop.launch.py`
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `can_interface` | can0 | CAN interface name |
-| `host_can_id` | 253 | Host CAN ID |
-| `device` | /dev/input/js0 | Gamepad device path |
-
-### `el_a3_moveit_config/robot.launch.py`
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `can_interface` | can0 | CAN interface name |
-| `host_can_id` | 253 | Host CAN ID |
-| `use_rviz` | true | Whether to launch RViz |
-
-### `el_a3_moveit_config/demo.launch.py`
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `use_mock_hardware` | true | Use simulated hardware |
-| `use_rviz` | true | Whether to launch RViz |
-
----
-
-## License
-
-Apache-2.0
-
-## Contact
-
-For questions, please contact the maintainer.
-
----
-
-**Last Updated**: 2026-02-10
