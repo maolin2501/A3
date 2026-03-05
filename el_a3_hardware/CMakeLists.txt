@@ -10,22 +10,20 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(hardware_interface REQUIRED)
+find_package(controller_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-
-# Pinocchio for dynamics computation
 find_package(pinocchio REQUIRED)
 
-# Include directories
 include_directories(include)
 
 # Hardware interface library
 add_library(${PROJECT_NAME} SHARED
   src/el_a3_hardware.cpp
   src/robstride_can_driver.cpp
-  src/s_curve_generator.cpp
+  src/zero_torque_controller.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -37,17 +35,17 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   rclcpp_lifecycle
   hardware_interface
+  controller_interface
   pluginlib
   sensor_msgs
   std_msgs
   std_srvs
 )
 
-# Link Pinocchio
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 
-# Export plugin
 pluginlib_export_plugin_description_file(hardware_interface el_a3_hardware_plugin.xml)
+pluginlib_export_plugin_description_file(controller_interface el_a3_controller_plugin.xml)
 
 # Install
 install(
@@ -64,7 +62,7 @@ install(
 )
 
 install(
-  FILES el_a3_hardware_plugin.xml
+  FILES el_a3_hardware_plugin.xml el_a3_controller_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -16,38 +16,18 @@ Xbox 手柄实时控制节点
 
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import Joy
-import socket
-import struct
+from sensor_msgs.msg import Joy, JointState
 from geometry_msgs.msg import PoseStamped, Pose
-from moveit_msgs.action import MoveGroup, ExecuteTrajectory
-from moveit_msgs.msg import (
-    MotionPlanRequest,
-    Constraints,
-    PositionConstraint,
-    OrientationConstraint,
-    BoundingVolume,
-    PlanningOptions,
-    RobotState,
-    JointConstraint,
-)
-from moveit_msgs.srv import GetCartesianPath, GetPositionIK
-from std_srvs.srv import SetBool
-from shape_msgs.msg import SolidPrimitive
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from sensor_msgs.msg import JointState
-from control_msgs.action import FollowJointTrajectory
-from builtin_interfaces.msg import Duration
 import tf2_ros
 import tf2_geometry_msgs
 import math
 import numpy as np
 import copy
+import threading
 
-# Use scipy instead of tf_transformations
 from scipy.spatial.transform import Rotation as R
+
+from el_a3_sdk.arm_manager import ArmManager
 
 def quaternion_from_euler(roll, pitch, yaw):
     """将欧拉角转换为四元数 (x, y, z, w)"""
@@ -80,12 +60,12 @@ class XboxTeleopNode(Node):
         self.declare_parameter('max_angular_velocity', 1.5)   # rad/s max angular velocity
         
         # Joint output smoothing parameters
-        self.declare_parameter('joint_smoothing_alpha', 0.15)  # Joint smoothing coefficient
+        self.declare_parameter('joint_smoothing_alpha', 0.35)  # Joint smoothing coefficient
         self.declare_parameter('max_joint_velocity', 1.5)      # rad/s max single joint velocity
         self.declare_parameter('max_joint_acceleration', 5.0)  # rad/s² max single joint acceleration
         
         # Input smoothing parameters
-        self.declare_parameter('input_smoothing_factor', 0.5)  # Input smoothing coefficient
+        self.declare_parameter('input_smoothing_factor', 0.7)  # Input smoothing coefficient
         
         # Singularity protection parameters
         self.declare_parameter('max_ik_jump_threshold', 0.5)   # rad max allowed single joint jump
@@ -96,14 +76,18 @@ class XboxTeleopNode(Node):
         
         # Master-slave teleoperation parameters (Menu button triggered)
         self.declare_parameter('master_slave_enabled', True)
+        self.declare_parameter('master_namespace', '')
+        self.declare_parameter('slave_namespace', 'arm2')
+        self.declare_parameter('master_controller', 'arm_controller')
+        self.declare_parameter('slave_controller', 'arm2_arm_controller')
         self.declare_parameter('master_joint_state_topic', '/arm1/joint_states')
         self.declare_parameter('master_trajectory_topic', '/arm1/arm1_arm_controller/joint_trajectory')
-        self.declare_parameter('master_zero_torque_service', '/el_a3/set_zero_torque_mode')
-        self.declare_parameter('master_joint_prefix', 'arm1_')
+        self.declare_parameter('zero_torque_controller', 'zero_torque_controller')
+        self.declare_parameter('gripper_controller', 'gripper_controller')
         self.declare_parameter('slave_joint_state_topic', '/arm2/joint_states')
         self.declare_parameter('slave_trajectory_topic', '/arm2/arm2_arm_controller/joint_trajectory')
-        self.declare_parameter('slave_joint_prefix', 'arm2_')
         self.declare_parameter('go_zero_duration', 3.0)
+        self.declare_parameter('master_slave_smoothing_alpha', 1.0)  # 1.0 = no smoothing
         
         # Get parameters
         self.update_rate = self.get_parameter('update_rate').value
@@ -139,14 +123,16 @@ class XboxTeleopNode(Node):
         
         # Master-slave teleoperation parameters
         self.master_slave_enabled = self.get_parameter('master_slave_enabled').value
+        self.master_namespace = self.get_parameter('master_namespace').value
+        self.slave_namespace = self.get_parameter('slave_namespace').value
+        self.master_controller = self.get_parameter('master_controller').value
+        self.slave_controller = self.get_parameter('slave_controller').value
         master_joint_state_topic = self.get_parameter('master_joint_state_topic').value
-        master_trajectory_topic = self.get_parameter('master_trajectory_topic').value
-        master_zero_torque_service = self.get_parameter('master_zero_torque_service').value
-        master_prefix = self.get_parameter('master_joint_prefix').value
+        self.zero_torque_ctrl_name = self.get_parameter('zero_torque_controller').value
+        self.gripper_ctrl_name = self.get_parameter('gripper_controller').value
         slave_joint_state_topic = self.get_parameter('slave_joint_state_topic').value
-        slave_trajectory_topic = self.get_parameter('slave_trajectory_topic').value
-        slave_prefix = self.get_parameter('slave_joint_prefix').value
         self.go_zero_duration = self.get_parameter('go_zero_duration').value
+        self.ms_smoothing_alpha = self.get_parameter('master_slave_smoothing_alpha').value
         
         # Calculate time step
         self.dt = 1.0 / self.update_rate
@@ -173,102 +159,48 @@ class XboxTeleopNode(Node):
         self.last_y_button = 0
         self.is_going_home = False  # Whether currently returning to home/zero
         self.home_start_time = None  # Home return start time
-        self.home_timeout = 15.0  # Home return timeout (seconds)
+        self.home_timeout = 5.0  # Safety timeout (timer fires earlier)
+        self._move_done_timer = None
+        self._pending_move_target = None
         
-        # Zero-torque (gravity compensation) mode
+        # Zero-torque mode (via SDK ZeroTorqueMode)
         self.zero_torque_mode = False
-        self.zero_torque_client = self.create_client(
-            SetBool, '/el_a3/set_zero_torque_mode')
         
         # Master-slave teleoperation mode state
         self.master_slave_mode = False
         self.entering_master_slave = False  # Switching in progress (go-to-zero process)
         self.last_menu_button = 0
         
-        # Slave arm ROS2 interface
-        # Use same BEST_EFFORT QoS as main arm trajectory publisher to match arm_controller subscriber
-        slave_trajectory_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
+        # Slave arm joint state subscription (trajectory publishing now via _slave_sdk)
         self.slave_joint_state = None
         self.slave_joint_sub = self.create_subscription(
             JointState, slave_joint_state_topic,
             self.slave_joint_state_callback, 10)
-        self.slave_trajectory_pub = self.create_publisher(
-            JointTrajectory, slave_trajectory_topic, slave_trajectory_qos)
         
         # Master arm namespace interface (for master arm communication in multi_arm mode)
         self.master_joint_state_ms = None  # Master-slave mode dedicated
         self.master_joint_sub_ms = self.create_subscription(
             JointState, master_joint_state_topic,
             self.master_joint_state_ms_callback, 10)
-        self.master_trajectory_pub_ms = self.create_publisher(
-            JointTrajectory, master_trajectory_topic, slave_trajectory_qos)
-        self.master_zero_torque_client_ms = self.create_client(
-            SetBool, master_zero_torque_service)
+        # Master-slave mode joint names (L1-L7 including gripper)
+        self.slave_joint_names = [f"L{i}_joint" for i in range(1, 8)]
+        self.master_joint_names_ms = [f"L{i}_joint" for i in range(1, 8)]
         
-        # Master-slave mode joint names (no prefix, matches URDF; arms distinguished by topic namespace)
-        self.slave_joint_names = [f"L{i}_joint" for i in range(1, 7)]
-        self.master_joint_names_ms = [f"L{i}_joint" for i in range(1, 7)]
-        
-        # D-pad controls gripper motor (ID=7)
+        # Master-slave safety / smoothing state
+        self._last_slave_cmd = None  # last command sent to slave (for velocity clamping)
+        self._smoothed_ms_positions = None  # EMA-smoothed master positions
+        self._ms_follow_count = 0
+
+        # D-pad controls gripper via L7_joint trajectory
         self.last_dpad_up = 0
         self.last_dpad_down = 0
-        self.gripper_torque = 0.0  # Current gripper torque
-        self.gripper_torque_step = 1.0  # Torque increment per button press (Nm)
-        self.gripper_motor_id = 7
+        self.gripper_target_angle = 0.0
+        self.gripper_angle_step = 0.2  # rad per press
         
-        # Initialize CAN socket for direct gripper command sending
-        self.can_socket = None
-        self.gripper_enabled = False
-        try:
-            self.can_socket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-            self.can_socket.bind(('can0',))
-            self.get_logger().info('CAN socket 初始化成功，已启用夹爪控制')
-            # Enable gripper motor
-            self.enable_gripper_motor()
-        except Exception as e:
-            self.get_logger().warn(f'CAN socket 初始化失败，已禁用夹爪控制：{e}')
-        
-        # Motor 7 (gripper) parameter ranges for MIT mode
-        self.P_MIN, self.P_MAX = -12.57, 12.57
-        self.V_MIN, self.V_MAX = -50.0, 50.0
-        self.KP_MIN, self.KP_MAX = 0.0, 500.0
-        self.KD_MIN, self.KD_MAX = 0.0, 5.0
-        self.T_MIN, self.T_MAX = -12.0, 12.0
-        
-        # Motor 7 master-slave state
-        self.motor7_position = 0.0
-        self.motor7_valid = False
-        
-        # CAN-based slave arm direct control parameters (all 7 motors)
-        self.slave_follow_kp = 80.0  # MIT mode Kp for position follow
-        self.slave_follow_kd = 2.0   # MIT mode Kd for velocity damping
-        # Motor direction mapping: joint_pos * direction = motor_pos (from URDF ros2_control config)
-        # Motors 1-6 (L1-L6 joints), Motor 7 (gripper, no direction inversion needed)
-        self.motor_directions = [-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0]  # 7 motors
-        self._slave_can_going_zero = False
-        self._slave_zero_start_positions = [0.0] * 7  # Motors 1-7 (in motor coordinate frame)
-        self._slave_zero_frame = 0
-        self._slave_zero_total_frames = 0
-        
-        # Set can0 socket to non-blocking for Motor 7 feedback reading
-        if self.can_socket is not None:
-            self.can_socket.setblocking(False)
-        
-        # CAN1 socket for Motor 7 slave follow (only if master-slave enabled)
-        self.can1_socket = None
-        if self.master_slave_enabled:
-            try:
-                self.can1_socket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-                self.can1_socket.bind(('can1',))
-                self.can1_socket.setblocking(False)
-                self._enable_motor_on_socket(self.can1_socket, self.gripper_motor_id)
-                self.get_logger().info('CAN1 socket 初始化成功（从臂 Motor 7 跟随）')
-            except Exception as e:
-                self.get_logger().warn(f'CAN1 socket 初始化失败，从臂 Motor 7 跟随不可用：{e}')
+        # ArmManager for multi-arm management (SDK-based, no direct CAN)
+        self._arm_mgr = ArmManager.get_instance()
+        self._master_sdk = None
+        self._slave_sdk = None
         
         # Input smoothing filter state (exponential moving average)
         self.smoothed_vx = 0.0  # Smoothed X velocity
@@ -308,37 +240,7 @@ class XboxTeleopNode(Node):
             10
         )
         
-        # Cartesian path service client
-        self.cartesian_path_client = self.create_client(
-            GetCartesianPath,
-            '/compute_cartesian_path'
-        )
-        
-        # IK service client - for fast control
-        self.ik_client = self.create_client(
-            GetPositionIK,
-            '/compute_ik'
-        )
-        
-        # Direct joint trajectory publishing - for fast control
-        # Use BEST_EFFORT QoS to match arm_controller subscription settings
-        trajectory_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
-        self.joint_trajectory_pub = self.create_publisher(
-            JointTrajectory,
-            '/arm_controller/joint_trajectory',
-            trajectory_qos
-        )
-        
-        # Joint trajectory Action client - for direct trajectory sending
-        self.follow_joint_trajectory_client = ActionClient(
-            self,
-            FollowJointTrajectory,
-            '/arm_controller/follow_joint_trajectory'
-        )
+        # IK and Cartesian path now handled by SDK (self._master_sdk)
         
         # Subscribe to current joint states
         self.current_joint_state = None
@@ -349,7 +251,8 @@ class XboxTeleopNode(Node):
             10
         )
         
-        # Joint names
+        # Joint names (L1-L7 including gripper; IK uses L1-L6 only)
+        self.joint_names_7 = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint', 'L7_joint']
         self.joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
         
         # [Debug] IK solution publisher - for Foxglove tracking
@@ -368,21 +271,13 @@ class XboxTeleopNode(Node):
         
         # IK request state tracking (for fast IK mode)
         self.pending_ik_request = False  # Whether there is a pending IK request
+        self._ik_resend_needed = False  # True when a newer target arrived while IK was in flight
         self.last_ik_joint_positions = None  # Cache of last IK joint positions
+        self._latest_ik_raw = None      # IK callback writes latest raw solution here
+        self._latest_ik_consumed = True  # True once the 50Hz timer has consumed the result
+        self._ik_smooth_target = None   # Last accepted raw IK target to continuously smooth toward
         
-        # Execute trajectory Action client
-        self.execute_trajectory_client = ActionClient(
-            self,
-            ExecuteTrajectory,
-            '/execute_trajectory'
-        )
-        
-        # MoveGroup Action client (for returning to home)
-        self.move_group_client = ActionClient(
-            self,
-            MoveGroup,
-            '/move_action'
-        )
+        # MoveGroup and ExecuteTrajectory now handled by SDK (self._master_sdk)
         
         # State variables
         self.current_joy = None
@@ -395,19 +290,66 @@ class XboxTeleopNode(Node):
         self.move_start_time = None  # Motion start time, for timeout detection
         self.move_timeout = 2.0  # Motion timeout (seconds)
         
-        # Wait for services
-        if self.use_fast_ik_mode:
-            self.get_logger().info('等待 IK 服务（快速模式）...')
-            self.ik_client.wait_for_service()
-            self.get_logger().info('IK 服务已连接：使用 50Hz 快速 IK 控制模式')
+        # ArmManager SDK integration (must be before service waits and startup_go_zero)
+        try:
+            self._master_sdk = self._arm_mgr.register_ros_arm(
+                "master",
+                namespace=self.master_namespace,
+                controller_name=self.master_controller,
+                move_group_name=self.planning_group,
+                ee_link=self.end_effector_frame,
+                base_link=self.base_frame,
+                use_internal_executor=False,
+            )
+            self._master_sdk.ConnectPort()
+            self.get_logger().info(f'主臂 SDK 已注册（namespace={self.master_namespace!r}，外部 executor 模式）')
+        except Exception as e:
+            self.get_logger().warn(f'主臂 SDK 初始化失败：{e}')
+            self._master_sdk = None
+
+        if self.master_slave_enabled:
+            try:
+                self._slave_sdk = self._arm_mgr.register_ros_arm(
+                    "slave",
+                    namespace=self.slave_namespace,
+                    controller_name=self.slave_controller,
+                    use_internal_executor=False,
+                )
+                self._slave_sdk.ConnectPort()
+                self.get_logger().info(f'从臂 SDK 已注册（namespace={self.slave_namespace!r}，外部 executor 模式）')
+            except Exception as e:
+                self.get_logger().warn(f'从臂 SDK 初始化失败：{e}')
+                self._slave_sdk = None
+
+        # Wait for MoveIt services via SDK (with timeout, non-blocking if unavailable)
+        self._moveit_available = False
+        _svc_timeout = 5.0  # seconds
+        if self._master_sdk:
+            if self.use_fast_ik_mode:
+                self.get_logger().info('等待 IK 服务（快速模式，超时 %.0fs）...' % _svc_timeout)
+                if self._master_sdk._ik_client and self._master_sdk._ik_client.wait_for_service(timeout_sec=_svc_timeout):
+                    self.get_logger().info('IK 服务已连接：使用 50Hz 快速 IK 控制模式')
+                    self._moveit_available = True
+                else:
+                    self.get_logger().warn('IK 服务不可用，笛卡尔控制将被禁用，关节控制仍可使用')
+            else:
+                self.get_logger().info('等待笛卡尔路径服务（超时 %.0fs）...' % _svc_timeout)
+                if self._master_sdk._cartesian_path_client and self._master_sdk._cartesian_path_client.wait_for_service(timeout_sec=_svc_timeout):
+                    self._moveit_available = True
+                else:
+                    self.get_logger().warn('笛卡尔路径服务不可用，笛卡尔控制将被禁用')
+            if self._moveit_available:
+                self.get_logger().info('等待 MoveGroup 服务...')
+                if self._master_sdk._move_group_client:
+                    if not self._master_sdk._move_group_client.wait_for_server(timeout_sec=_svc_timeout):
+                        self.get_logger().warn('MoveGroup 服务不可用')
+                        self._moveit_available = False
+            if self._moveit_available:
+                self.get_logger().info('MoveIt 服务已全部连接')
+            else:
+                self.get_logger().warn('MoveIt 服务未就绪，仅关节控制/主从模式可用')
         else:
-            self.get_logger().info('等待笛卡尔路径服务...')
-            self.cartesian_path_client.wait_for_service()
-        self.get_logger().info('等待轨迹执行服务...')
-        self.execute_trajectory_client.wait_for_server()
-        self.get_logger().info('等待 MoveGroup 服务...')
-        self.move_group_client.wait_for_server()
-        self.get_logger().info('服务已连接')
+            self.get_logger().warn('SDK 未初始化，跳过 MoveIt 服务等待')
         
         # [Auto home on startup]
         # 1. Wait for joint states to be available (ensure motor positions are read)
@@ -439,12 +381,13 @@ class XboxTeleopNode(Node):
             self.get_logger().info('控制模式：快速 IK 模式（50Hz 笛卡尔控制）')
         else:
             self.get_logger().info('控制模式：传统路径规划模式')
+
         self.get_logger().info('=== 控制说明 ===')
         self.get_logger().info('左摇杆：XY 平移 | LT/RT：Z 平移')
         self.get_logger().info('右摇杆：Yaw/Roll | LB/RB：Pitch')
         self.get_logger().info('A：切换速度档 | B：回 home | X：回零位')
         self.get_logger().info('Y：切换重力补偿模式（手动示教/拖动）')
-        self.get_logger().info('Menu：切换主从遥操作（can0 主 / can1 从）')
+        self.get_logger().info('Menu：切换主从遥操作（ROS namespace 模式）')
         self.log_speed_level()
         
     def sync_current_pose(self):
@@ -517,6 +460,8 @@ class XboxTeleopNode(Node):
     def master_joint_state_ms_callback(self, msg):
         """Master namespace joint state callback (for master-slave mode)"""
         self.master_joint_state_ms = msg
+        if self.master_slave_mode:
+            self._master_slave_follow()
     
     def wait_for_joint_states(self, timeout_sec=10.0):
         """Wait for joint states (ensure motor positions are read)"""
@@ -530,108 +475,36 @@ class XboxTeleopNode(Node):
         return True
     
     def startup_go_zero(self):
-        """Move to zero position on startup (sync), then enable collision checking"""
+        """Move to zero position on startup via SDK JointCtrlList"""
         import time
-        
+
         self.is_going_home = True
         self.home_start_time = self.get_clock().now()
-        
-        # Wait for MoveGroup service to be fully ready (including planning scene)
-        self.get_logger().info('等待 MoveGroup 服务完全就绪...')
-        time.sleep(3.0)  # Wait for MoveGroup initialization
-        
-        # Retry mechanism
-        max_retries = 3
-        for retry in range(max_retries):
-            # Create MoveGroup request
-            goal_msg = MoveGroup.Goal()
-            goal_msg.request.group_name = self.planning_group
-            goal_msg.request.num_planning_attempts = 10
-            goal_msg.request.allowed_planning_time = 10.0
-            goal_msg.request.max_velocity_scaling_factor = 0.15  # Slower motion on startup for safety
-            goal_msg.request.max_acceleration_scaling_factor = 0.15
-            
-            # Set target joint positions (zero position)
-            # Zero position: all joints to zero
-            joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
-            joint_values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All joints to zero
-            
-            constraints = Constraints()
-            for name, value in zip(joint_names, joint_values):
-                joint_constraint = JointConstraint()
-                joint_constraint.joint_name = name
-                joint_constraint.position = value
-                joint_constraint.tolerance_above = 0.01
-                joint_constraint.tolerance_below = 0.01
-                joint_constraint.weight = 1.0
-                constraints.joint_constraints.append(joint_constraint)
-            
-            goal_msg.request.goal_constraints = [constraints]
-            goal_msg.planning_options.plan_only = False
-            goal_msg.planning_options.replan = True
-            goal_msg.planning_options.replan_attempts = 3
-            
-            # Send request and wait for result
-            self.get_logger().info(f'发送零位运动请求...（第 {retry + 1}/{max_retries} 次）')
-            send_goal_future = self.move_group_client.send_goal_async(goal_msg)
-            
-            # Wait for goal acceptance
-            rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
-            goal_handle = send_goal_future.result()
-            
-            if goal_handle and goal_handle.accepted:
-                self.get_logger().info('零位请求已接受，正在低速执行...')
-                
-                # Wait for execution to complete
-                result_future = goal_handle.get_result_async()
-                rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
-                
-                result = result_future.result()
-                self.is_going_home = False
-                self.home_start_time = None
-                
-                # Check result
-                try:
-                    if result and result.result and result.result.error_code.val == result.result.error_code.SUCCESS:
-                        self.get_logger().info('✓ 已低速移动到零位！')
-                        # [Improvement] Use zero position as starting point to avoid TF drift
-                        zero_joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                        self.last_ik_joint_positions = zero_joint_positions
-                        self.smoothed_joint_positions = list(zero_joint_positions)
-                        self.last_joint_velocities = [0.0] * 6
-                        self.ik_seed_just_initialized = True
-                        self.consecutive_ik_rejects = 0
-                        self.pose_initialized = False  # Still need Cartesian pose from TF
-                        self.get_logger().info('IK 种子已设置为零位')
-                        # Enable collision checking after successful motion
-                        if self.enable_collision_check:
-                            self.collision_check_active = True
-                            self.get_logger().info('✓ 已启用碰撞检测')
-                        return True
-                    else:
-                        error_code = 'unknown'
-                        if result and result.result and hasattr(result.result, 'error_code'):
-                            error_code = result.result.error_code.val
-                        self.get_logger().warn(f'零位执行失败：error_code={error_code}')
-                        # Reset state on failure
-                        self.pose_initialized = False
-                        self.smoothed_joint_positions = None
-                        self.last_ik_joint_positions = None
-                except Exception as e:
-                    self.get_logger().warn(f'解析零位结果失败：{e}')
-                    self.pose_initialized = False
-                    self.smoothed_joint_positions = None
-                    self.last_ik_joint_positions = None
-            else:
-                self.get_logger().warn('零位请求被拒绝，正在重试...')
-                time.sleep(2.0)  # Wait before retry
-        
-        self.get_logger().error('多次尝试后零位仍失败。请手动控制机械臂。')
+
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().error('SDK 未连接，无法规划零位')
+            self.is_going_home = False
+            self.home_start_time = None
+            return False
+
+        time.sleep(1.0)
+
+        self.get_logger().info('发送零位轨迹（SDK JointCtrlList）...')
+        ok = self._master_sdk.JointCtrlList([0.0] * 6, duration_ns=3_000_000_000)
+        if ok:
+            time.sleep(3.5)
+            self.get_logger().info('已移动到零位')
+            self._finalize_move([0.0] * 6)
+            if self.enable_collision_check:
+                self.collision_check_active = True
+                self.get_logger().info('已启用碰撞检测')
+            self.is_going_home = False
+            self.home_start_time = None
+            return True
+
+        self.get_logger().error('零位轨迹发布失败')
         self.is_going_home = False
         self.home_start_time = None
-        self.pose_initialized = False
-        self.smoothed_joint_positions = None
-        self.last_ik_joint_positions = None
         return False
     
     def joy_callback(self, msg):
@@ -688,200 +561,139 @@ class XboxTeleopNode(Node):
         self.speed_factor = level['factor']
         self.log_speed_level()
     
+    def _finalize_move(self, target_positions):
+        """Reset IK state after a successful direct move"""
+        self.last_ik_joint_positions = list(target_positions)
+        self.smoothed_joint_positions = list(target_positions)
+        self._ik_smooth_target = list(target_positions)
+        self.last_joint_velocities = [0.0] * 6
+        self._latest_ik_raw = None
+        self._latest_ik_consumed = True
+        self.ik_seed_just_initialized = True
+        self.consecutive_ik_rejects = 0
+        self.pose_initialized = False
+
     def go_home(self):
-        """Return to home position"""
+        """Return to home position via SDK PlanToJointGoalAsync (with fallback)"""
         if self.is_moving or self.is_going_home:
             self.get_logger().warn('当前正在执行其他动作，请稍后再试')
             return
-        
+
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().warn('SDK 未连接，无法回到 home')
+            return
+
+        home_positions = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]
+
         self.is_going_home = True
         self.home_start_time = self.get_clock().now()
-        self.get_logger().info('正在回到 home 位置...')
-        
-        # Create MoveGroup request
-        goal_msg = MoveGroup.Goal()
-        
-        # Configure motion request
-        goal_msg.request.group_name = self.planning_group
-        goal_msg.request.num_planning_attempts = 5
-        goal_msg.request.allowed_planning_time = 5.0
-        goal_msg.request.max_velocity_scaling_factor = 0.3
-        goal_msg.request.max_acceleration_scaling_factor = 0.3
-        
-        # Set target to named position "home"
-        goal_msg.request.goal_constraints = []
-        
-        # Use joint constraints to define home position
-        # Home position: L1=0, L2=45°, L3=-45°, L4=0, L5=0, L6=0
-        joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
-        joint_values = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]  # Radians
-        
-        constraints = Constraints()
-        for name, value in zip(joint_names, joint_values):
-            joint_constraint = JointConstraint()
-            joint_constraint.joint_name = name
-            joint_constraint.position = value
-            joint_constraint.tolerance_above = 0.01
-            joint_constraint.tolerance_below = 0.01
-            joint_constraint.weight = 1.0
-            constraints.joint_constraints.append(joint_constraint)
-        
-        goal_msg.request.goal_constraints = [constraints]
-        
-        # Set planning options
-        goal_msg.planning_options.plan_only = False
-        goal_msg.planning_options.look_around = False
-        goal_msg.planning_options.replan = True
-        goal_msg.planning_options.replan_attempts = 3
-        
-        # Send request
-        send_goal_future = self.move_group_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(self.home_response_callback)
-    
-    def home_response_callback(self, future):
-        """Home response callback"""
-        goal_handle = future.result()
-        
-        if not goal_handle.accepted:
-            self.get_logger().warn('home 请求被拒绝')
-            self.is_going_home = False
-            self.home_start_time = None
-            return
-        
-        self.get_logger().info('home 请求已接受，正在执行...')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.home_result_callback)
-    
-    def home_result_callback(self, future):
-        """Home result callback"""
-        result = future.result().result
+        self._pending_move_target = home_positions
+        self.get_logger().info('正在回到 home 位置（SDK PlanToJointGoalAsync）...')
+
+        try:
+            self._master_sdk.PlanToJointGoalAsync(
+                joint_positions=home_positions,
+                velocity_scale=0.3,
+                accel_scale=0.3,
+                result_callback=self._on_home_complete,
+            )
+        except Exception as e:
+            self.get_logger().warn(f'PlanToJointGoalAsync 失败（{e}），使用 SDK JointCtrlList fallback')
+            self._master_sdk.JointCtrlList(home_positions, duration_ns=2_000_000_000)
+            self._move_done_timer = self.create_timer(2.5, self._on_move_done_timer)
+
+    def _on_home_complete(self, success):
+        """SDK PlanToJointGoalAsync callback for home"""
+        target = getattr(self, '_pending_move_target', None)
+        if success and target is not None:
+            self._finalize_move(target)
+            self.get_logger().info(f'已回到 home 位置（SDK 规划成功）')
+        else:
+            self.get_logger().warn('home 运动 SDK 报告失败（机械臂可能已到位）')
+            if target is not None:
+                self._finalize_move(target)
+        self._pending_move_target = None
         self.is_going_home = False
         self.home_start_time = None
-        
-        if result.error_code.val == result.error_code.SUCCESS:
-            self.get_logger().info('已回到 home 位置！')
-            # [Improvement] Use home as start to avoid TF drift
-            home_joint_positions = [0.0, 0.785, -0.785, 0.0, 0.0, 0.0]
-            self.last_ik_joint_positions = home_joint_positions
-            self.smoothed_joint_positions = list(home_joint_positions)
-            self.last_joint_velocities = [0.0] * 6
-            self.ik_seed_just_initialized = True
-            self.consecutive_ik_rejects = 0
-            # Still let sync_current_pose() get Cartesian pose (from TF)
-            self.pose_initialized = False
-            self.get_logger().info(f'IK 种子已设置为 home：{[f"{p:.3f}" for p in home_joint_positions]}')
-        else:
-            self.get_logger().warn(f'home 运动失败：error_code={result.error_code.val}')
-            self.pose_initialized = False
-            self.smoothed_joint_positions = None
-            self.last_ik_joint_positions = None
-    
+
     def go_zero(self):
-        """Return to zero position (all joints zero)"""
+        """Return to zero position via SDK PlanToJointGoalAsync (with fallback)"""
         if self.is_moving or self.is_going_home:
             self.get_logger().warn('当前正在执行其他动作，请稍后再试')
             return
-        
+
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().warn('SDK 未连接，无法回到零位')
+            return
+
+        zero_positions = [0.0] * 6
+
         self.is_going_home = True
         self.home_start_time = self.get_clock().now()
-        self.get_logger().info('正在回到零位...')
-        
-        # Create MoveGroup request
-        goal_msg = MoveGroup.Goal()
-        
-        # Configure motion request
-        goal_msg.request.group_name = self.planning_group
-        goal_msg.request.num_planning_attempts = 5
-        goal_msg.request.allowed_planning_time = 5.0
-        goal_msg.request.max_velocity_scaling_factor = 0.3
-        goal_msg.request.max_acceleration_scaling_factor = 0.3
-        
-        # Set target to zero position
-        # Zero position: all joints are 0
-        joint_names = ['L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint']
-        joint_values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Radians
-        
-        constraints = Constraints()
-        for name, value in zip(joint_names, joint_values):
-            joint_constraint = JointConstraint()
-            joint_constraint.joint_name = name
-            joint_constraint.position = value
-            joint_constraint.tolerance_above = 0.01
-            joint_constraint.tolerance_below = 0.01
-            joint_constraint.weight = 1.0
-            constraints.joint_constraints.append(joint_constraint)
-        
-        goal_msg.request.goal_constraints = [constraints]
-        
-        # Set planning options
-        goal_msg.planning_options.plan_only = False
-        goal_msg.planning_options.look_around = False
-        goal_msg.planning_options.replan = True
-        goal_msg.planning_options.replan_attempts = 3
-        
-        # Send request
-        send_goal_future = self.move_group_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(self.zero_response_callback)
-    
-    def zero_response_callback(self, future):
-        """Zero response callback"""
-        goal_handle = future.result()
-        
-        if not goal_handle.accepted:
-            self.get_logger().warn('零位请求被拒绝')
-            self.is_going_home = False
-            self.home_start_time = None
-            return
-        
-        self.get_logger().info('零位请求已接受，正在执行...')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.zero_result_callback)
-    
-    def zero_result_callback(self, future):
-        """Zero result callback"""
-        result = future.result().result
+        self._pending_move_target = zero_positions
+        self.get_logger().info('正在回到零位（SDK PlanToJointGoalAsync）...')
+
+        try:
+            self._master_sdk.PlanToJointGoalAsync(
+                joint_positions=zero_positions,
+                velocity_scale=0.3,
+                accel_scale=0.3,
+                result_callback=self._on_zero_complete,
+            )
+        except Exception as e:
+            self.get_logger().warn(f'PlanToJointGoalAsync 失败（{e}），使用 SDK JointCtrlList fallback')
+            self._master_sdk.JointCtrlList(zero_positions, duration_ns=2_000_000_000)
+            self._move_done_timer = self.create_timer(2.5, self._on_move_done_timer)
+
+    def _on_zero_complete(self, success):
+        """SDK PlanToJointGoalAsync callback for zero"""
+        target = getattr(self, '_pending_move_target', None)
+        if success and target is not None:
+            self._finalize_move(target)
+            self.get_logger().info('已回到零位（SDK 规划成功）')
+        else:
+            self.get_logger().warn('零位运动 SDK 报告失败（机械臂可能已到位）')
+            if target is not None:
+                self._finalize_move(target)
+        self._pending_move_target = None
         self.is_going_home = False
         self.home_start_time = None
-        
-        if result.error_code.val == result.error_code.SUCCESS:
-            self.get_logger().info('已回到零位！')
-            # [Improvement] Use zero as start to avoid TF drift
-            zero_joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-            self.last_ik_joint_positions = zero_joint_positions
-            self.smoothed_joint_positions = list(zero_joint_positions)
-            self.last_joint_velocities = [0.0] * 6
-            self.ik_seed_just_initialized = True
-            self.consecutive_ik_rejects = 0
-            # Still let sync_current_pose() get Cartesian pose (from TF)
-            self.pose_initialized = False
-            self.get_logger().info(f'IK 种子已设置为零位：{[f"{p:.3f}" for p in zero_joint_positions]}')
-        else:
-            self.get_logger().warn(f'零位运动失败：error_code={result.error_code.val}')
-            self.pose_initialized = False
-            self.smoothed_joint_positions = None
-            self.last_ik_joint_positions = None
+
+    def _on_move_done_timer(self):
+        """Timer fallback: finalize home/zero move if SDK callback didn't fire"""
+        if hasattr(self, '_move_done_timer') and self._move_done_timer:
+            self.destroy_timer(self._move_done_timer)
+            self._move_done_timer = None
+
+        target = getattr(self, '_pending_move_target', None)
+        if target is not None:
+            self._finalize_move(target)
+            self.get_logger().info(f'已到达目标位置（fallback timer）：{[f"{p:.3f}" for p in target]}')
+            self._pending_move_target = None
+
+        self.is_going_home = False
+        self.home_start_time = None
     
     def toggle_zero_torque_mode(self):
-        """Toggle gravity compensation (zero torque) mode"""
-        if not self.zero_torque_client.service_is_ready():
-            self.get_logger().warn('零力矩/重力补偿服务不可用')
+        """Toggle gravity compensation (zero torque) mode via SDK ZeroTorqueMode"""
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().warn('SDK 未连接，无法切换零力矩模式')
             return
 
         new_state = not self.zero_torque_mode
 
         if not new_state:
-            # Before disabling: send current position to arm_controller to prevent jump
             self._sync_controller_to_current_position()
 
-        # Call service
-        req = SetBool.Request()
-        req.data = new_state
-        future = self.zero_torque_client.call_async(req)
-        future.add_done_callback(
-            lambda f: self._zero_torque_response(f, new_state))
+        self.get_logger().info(f'正在{"开启" if new_state else "关闭"}零力矩模式...')
+        threading.Thread(
+            target=self._sdk_zero_torque_thread,
+            args=(new_state,),
+            daemon=True,
+        ).start()
 
     def _sync_controller_to_current_position(self):
-        """Send current joint positions to arm_controller to avoid mode-switch jumps"""
+        """Send current joint positions to arm_controller via SDK to avoid mode-switch jumps"""
         if self.current_joint_state is None:
             return
         positions = []
@@ -891,59 +703,55 @@ class XboxTeleopNode(Node):
                 positions.append(self.current_joint_state.position[idx])
             else:
                 positions.append(0.0)
-        # Send a short trajectory to update arm_controller state immediately
-        msg = JointTrajectory()
-        msg.joint_names = self.joint_names
-        point = JointTrajectoryPoint()
-        point.positions = positions
-        point.velocities = [0.0] * 6
-        point.time_from_start = Duration(sec=0, nanosec=50_000_000)  # 50ms
-        msg.points = [point]
-        self.joint_trajectory_pub.publish(msg)
+        if self._master_sdk and self._master_sdk._connected:
+            self._master_sdk.JointCtrlList(positions, duration_ns=50_000_000)
+        else:
+            self.get_logger().warn('SDK 未连接，无法同步位置')
 
-    def _zero_torque_response(self, future, new_state):
-        """Zero torque service callback"""
+    def _sdk_zero_torque_thread(self, enable):
+        """Background thread for SDK ZeroTorqueMode (blocking call)"""
         try:
-            result = future.result()
-            if result.success:
-                self.zero_torque_mode = new_state
-                if new_state:
+            ok = self._master_sdk.ZeroTorqueMode(enable)
+            if ok:
+                self.zero_torque_mode = enable
+                if enable:
                     self.get_logger().info('>>> 已开启重力补偿：机械臂可手动拖动 <<<')
                 else:
-                    # Restore control: resync pose and IK seed
-                    self.pose_initialized = False  # Trigger pose resync
-                    self.last_ik_joint_positions = None  # Re-init IK seed from joint_states
+                    self.pose_initialized = False
+                    self.last_ik_joint_positions = None
+                    self._ik_smooth_target = None
                     self.get_logger().info('>>> 已关闭重力补偿：恢复控制器控制 <<<')
             else:
-                self.get_logger().error(f'零力矩模式切换失败：{result.message}')
+                self.get_logger().error('零力矩模式切换失败')
         except Exception as e:
-            self.get_logger().error(f'零力矩服务调用异常：{e}')
+            self.get_logger().error(f'零力矩切换异常：{e}')
         
     # ============ Master-slave teleoperation mode ============
 
     def toggle_master_slave_mode(self):
-        """Toggle master-slave teleoperation mode (Menu button)"""
+        """Toggle master-slave teleoperation mode (Menu button) — ROS namespace mode"""
         if self.entering_master_slave:
             self.get_logger().warn('正在切换主从模式，请稍候')
             return
         
         if not self.master_slave_mode:
             # === Enable master-slave mode ===
-            self.get_logger().info('>>> 正在启用主从遥操作模式 <<<')
+            self.get_logger().info('>>> 正在启用主从遥操作模式（ROS namespace） <<<')
             self.entering_master_slave = True
             
-            # Check master joint states availability (slave uses direct CAN, no ROS topic needed)
             if self.master_joint_state_ms is None:
                 self.get_logger().error('主臂关节状态不可用，无法启用主从模式')
-                self.get_logger().error('请确认主臂 ros2_control 已启动')
+                self.entering_master_slave = False
+                return
+
+            if self._slave_sdk is None:
+                self.get_logger().error('从臂 SDK 不可用，无法启用主从模式')
                 self.entering_master_slave = False
                 return
             
-            # Send zero trajectory to both arms
-            self._move_both_to_zero()
+            self._move_both_to_zero_ros()
             
-            # Use timer to wait for zero motion then proceed
-            delay = self.go_zero_duration + 0.5  # Extra 0.5s to ensure arrival
+            delay = self.go_zero_duration + 0.5
             self._ms_enable_timer = self.create_timer(
                 delay, self._on_go_zero_done_enable)
         else:
@@ -952,159 +760,95 @@ class XboxTeleopNode(Node):
             self.master_slave_mode = False
             self.entering_master_slave = True
             
-            # Note: can1 motors 1-7 keep holding last position during go-zero phase
-            # They will be released (zero torque) in _on_go_zero_done_disable()
-            
-            # First disable master gravity compensation (restore trajectory control)
             self._set_master_zero_torque(False)
             
-            # Wait for gravity compensation to disable before zeroing
             self._ms_disable_pre_timer = self.create_timer(
                 0.5, self._on_gravity_off_then_go_zero)
 
     def _on_gravity_off_then_go_zero(self):
         """Send zero trajectory after gravity compensation is off"""
-        # Destroy this one-shot timer
         self._ms_disable_pre_timer.cancel()
         self.destroy_timer(self._ms_disable_pre_timer)
         
-        # Re-read joint states and send zero trajectory
-        self._move_both_to_zero()
+        self._move_both_to_zero_ros()
         
-        # Use timer to wait for zero motion
         delay = self.go_zero_duration + 0.5
         self._ms_disable_timer = self.create_timer(
             delay, self._on_go_zero_done_disable)
 
     def _on_go_zero_done_enable(self):
         """Enable master gravity compensation after zeroing (enable flow)"""
-        # Destroy this one-shot timer
         self._ms_enable_timer.cancel()
         self.destroy_timer(self._ms_enable_timer)
         
-        # Enable master gravity compensation (L1-L6)
         self._set_master_zero_torque(True)
-        
-        # Enable can0 Motor 7 for zero torque mode (draggable)
-        if self.can_socket is not None:
-            self._enable_motor_on_socket(self.can_socket, self.gripper_motor_id)
-            self.get_logger().info('can0 Motor 7 已使能（零力矩模式）')
-        
-        # Re-ensure all can1 motors enabled (already enabled in _move_both_to_zero)
-        if self.can1_socket is not None:
-            for motor_id in range(1, 8):
-                self._enable_motor_on_socket(self.can1_socket, motor_id)
-            self.get_logger().info('can1 Motors 1-7 已确认使能（CAN 跟随模式）')
-        
-        self.motor7_valid = False
+
+        # Reset follow state for clean start
+        self._last_slave_cmd = None
+        self._smoothed_ms_positions = None
+        self._ms_follow_count = 0
+        if hasattr(self, '_ms_last_stamp'):
+            del self._ms_last_stamp
+
         self.master_slave_mode = True
         self.entering_master_slave = False
-        self.get_logger().info('>>> 主从遥操作已启用（全 CAN 直接通信） <<<')
-        self.get_logger().info('  can0（主臂）：L1-L6 重力补偿 + L7 零力矩可拖动')
-        self.get_logger().info('  can1（从臂）：L1-L7 直接 CAN MIT 跟随')
-        self.get_logger().info('  注意：请勿同时运行 arm2 的 ros2_control_node')
+        self.get_logger().info('>>> 主从遥操作已启用（ROS namespace 模式） <<<')
+        self.get_logger().info(f'  主臂（{self.master_namespace or "default"}）：L1-L7 重力补偿可拖动')
+        self.get_logger().info(f'  从臂（{self.slave_namespace}）：L1-L7 ROS 轨迹跟随')
         self.get_logger().info('  再按一次 Menu 退出')
 
     def _on_go_zero_done_disable(self):
         """Restore normal control after zeroing (disable flow)"""
-        # Destroy this one-shot timer
         self._ms_disable_timer.cancel()
         self.destroy_timer(self._ms_disable_timer)
         
-        # Release all can1 motors (send zero torque)
-        if self.can1_socket is not None:
-            for motor_id in range(1, 8):
-                self._send_mit_command(
-                    self.can1_socket, motor_id,
-                    0.0, 0.0, 0.0, 0.0, 0.0)
-            self.get_logger().info('can1 Motors 1-7 已释放（零力矩）')
-        
         self.entering_master_slave = False
         
-        # Sync controller to zero, restore normal Xbox control
         self._sync_controller_to_current_position()
         self.pose_initialized = False
         self.last_ik_joint_positions = None
         self.smoothed_joint_positions = None
+        self._ik_smooth_target = None
         self.get_logger().info('>>> 主从遥操作已关闭：恢复 Xbox 控制 <<<')
 
     def _set_master_zero_torque(self, enable):
-        """Set master gravity compensation (namespaced service for master-slave)"""
-        if not self.master_zero_torque_client_ms.service_is_ready():
-            self.get_logger().warn(f'主臂零力矩服务不可用：{self.master_zero_torque_client_ms.srv_name}')
-            return
-        
-        req = SetBool.Request()
-        req.data = enable
-        future = self.master_zero_torque_client_ms.call_async(req)
-        future.add_done_callback(
-            lambda f: self._master_zero_torque_response(f, enable))
+        """Set master gravity compensation via SDK ZeroTorqueMode (background thread)"""
+        if self._master_sdk and self._master_sdk._connected:
+            threading.Thread(
+                target=self._sdk_master_zero_torque_thread,
+                args=(enable,),
+                daemon=True,
+            ).start()
+        else:
+            self.get_logger().warn('主臂 SDK 不可用，无法切换零力矩模式')
 
-    def _master_zero_torque_response(self, future, enable):
-        """Master gravity compensation service callback"""
+    def _sdk_master_zero_torque_thread(self, enable):
+        """Background thread for master arm SDK ZeroTorqueMode"""
         try:
-            result = future.result()
-            if result.success:
-                state_str = '已开启' if enable else '已关闭'
+            ok = self._master_sdk.ZeroTorqueMode(enable)
+            state_str = '已开启' if enable else '已关闭'
+            if ok:
                 self.get_logger().info(f'主臂重力补偿{state_str}')
             else:
-                self.get_logger().error(f'主臂重力补偿切换失败：{result.message}')
+                self.get_logger().error('主臂重力补偿切换失败')
         except Exception as e:
-            self.get_logger().error(f'主臂重力补偿服务异常：{e}')
+            self.get_logger().error(f'主臂重力补偿切换异常：{e}')
 
-    def _move_both_to_zero(self):
-        """Send slow zero trajectories to both arms"""
-        duration = self.go_zero_duration
-        
-        # Master arm zeroing - use main joint_trajectory_pub (known working QoS)
-        if self.current_joint_state is not None:
-            master_positions = self._extract_joint_positions(
-                self.current_joint_state, self.joint_names)
-            if master_positions is not None:
-                traj = self._generate_zero_trajectory(
-                    master_positions, self.joint_names, duration)
-                self.joint_trajectory_pub.publish(traj)
-                self.get_logger().info(f'主臂（can0）已发送回零轨迹（{duration}s）')
-            else:
-                self.get_logger().warn('无法读取主臂关节位置')
-        
-        # Slave arm zeroing via direct CAN (all 7 motors)
-        if self.can1_socket is not None:
-            # Enable all motors 1-7 on can1 first
-            for motor_id in range(1, 8):
-                self._enable_motor_on_socket(self.can1_socket, motor_id)
-            self.get_logger().info('can1 Motors 1-7 已使能（准备回零）')
-            
-            # Get L1-L6 start positions: prefer slave joint state, fallback to master
-            slave_positions = None
-            if self.slave_joint_state is not None:
-                slave_positions = self._extract_joint_positions(
-                    self.slave_joint_state, self.slave_joint_names)
-            if slave_positions is None and self.master_joint_state_ms is not None:
-                slave_positions = self._extract_joint_positions(
-                    self.master_joint_state_ms, self.master_joint_names_ms)
-                self.get_logger().info('从臂关节状态不可用，使用主臂位置作为近似起始')
-            if slave_positions is None:
-                slave_positions = [0.0] * 6
-                self.get_logger().info('使用零位作为从臂起始位置')
-            
-            # Get Motor 7 start position from can0 feedback (already in motor frame)
-            motor7_start = self.motor7_position if self.motor7_valid else 0.0
-            
-            # Convert L1-L6 from joint coordinate → motor coordinate frame
-            motor_start_positions = [
-                slave_positions[i] * self.motor_directions[i] for i in range(6)
-            ]
-            # All 7 motors start positions (in motor coordinate frame)
-            self._slave_zero_start_positions = motor_start_positions + [motor7_start]
-            self._slave_zero_frame = 0
-            self._slave_zero_total_frames = int(duration * self.update_rate)
-            self._slave_can_going_zero = True
-            pos_str = ', '.join([f'{p:.3f}' for p in self._slave_zero_start_positions])
-            self.get_logger().info(
-                f'从臂（can1）CAN 直接回零（{duration}s），起始=[{pos_str}]')
+    def _move_both_to_zero_ros(self):
+        """Send slow zero trajectories to both arms via SDK JointCtrlList"""
+        duration_ns = int(self.go_zero_duration * 1_000_000_000)
+
+        if self._master_sdk and self._master_sdk._connected:
+            self._master_sdk.JointCtrlList([0.0] * 6, duration_ns=duration_ns)
+            self.get_logger().info(f'主臂已发送回零轨迹（SDK，{self.go_zero_duration}s）')
         else:
-            self.get_logger().warn('can1 socket 不可用，无法控制从臂回零')
+            self.get_logger().warn('SDK 主臂不可用，无法回零')
+
+        if self._slave_sdk and self._slave_sdk._connected:
+            self._slave_sdk.JointCtrlList([0.0] * 6, duration_ns=duration_ns)
+            self.get_logger().info(f'从臂已发送回零轨迹（SDK，{self.go_zero_duration}s）')
+        else:
+            self.get_logger().warn('从臂 SDK 不可用，无法控制从臂回零')
 
     def _extract_joint_positions(self, joint_state, joint_names):
         """Extract joint positions by name from JointState message"""
@@ -1117,176 +861,89 @@ class XboxTeleopNode(Node):
                 return None  # Missing joint data
         return positions
 
-    def _generate_zero_trajectory(self, current_positions, joint_names, duration=3.0, num_points=30):
-        """Generate a smooth S-curve trajectory from current position to zero
-        
-        Uses cosine interpolation (S-curve) for smooth acceleration/deceleration.
-        Start and end velocities are zero; intermediate velocities computed from derivatives.
+    def _extract_joint_velocities(self, joint_state, joint_names):
+        """Extract filtered joint velocities by name from JointState message.
+
+        The hardware layer already applies EMA low-pass filtering
+        (velocity_filter_alpha=0.3), so these values are suitable for
+        direct use as velocity feedforward targets.
         """
-        trajectory = JointTrajectory()
-        trajectory.joint_names = joint_names
-        n_joints = len(joint_names)
-        
-        for i in range(1, num_points + 1):
-            t_frac = i / num_points
-            # S-curve: alpha = 0.5 * (1 - cos(pi * t_frac))
-            # Starts slow, accelerates, then decelerates to stop
-            alpha = 0.5 * (1.0 - math.cos(math.pi * t_frac))
-            
-            point = JointTrajectoryPoint()
-            point.positions = [c * (1.0 - alpha) for c in current_positions]
-            
-            # Compute velocity from S-curve derivative:
-            # d(alpha)/dt = 0.5 * pi * sin(pi * t_frac) / duration
-            if i < num_points:
-                d_alpha = 0.5 * math.pi * math.sin(math.pi * t_frac) / duration
-                point.velocities = [-c * d_alpha for c in current_positions]
+        if not joint_state.velocity:
+            return None
+        velocities = []
+        for name in joint_names:
+            if name in joint_state.name:
+                idx = joint_state.name.index(name)
+                if idx < len(joint_state.velocity):
+                    velocities.append(joint_state.velocity[idx])
+                else:
+                    velocities.append(0.0)
             else:
-                point.velocities = [0.0] * n_joints  # Final point: zero velocity
-            
-            t = duration * t_frac
-            point.time_from_start = Duration(
-                sec=int(t), nanosec=int((t % 1) * 1e9))
-            trajectory.points.append(point)
-        
-        return trajectory
+                return None
+        return velocities
 
     def _master_slave_follow(self):
-        """Master-slave follow: read master and send to slave via direct CAN (50Hz)
-        All 7 motors use CAN MIT commands: can0 read → can1 write
+        """Master-slave follow: read master L1-L7 joints, send to slave via SDK.
+
+        Called directly from master_joint_state_ms_callback at master
+        publish rate (~200Hz) for lowest-latency following.
         """
         if self.master_joint_state_ms is None:
             return
-        
-        # === L1-L6: Direct CAN MIT commands to can1 ===
-        # Convert joint coordinate → motor coordinate: motor_pos = joint_pos * direction
+
         master_positions = self._extract_joint_positions(
             self.master_joint_state_ms, self.master_joint_names_ms)
-        if master_positions is not None and self.can1_socket is not None:
-            for i, pos in enumerate(master_positions):
-                motor_id = i + 1  # Motor IDs 1-6
-                motor_pos = pos * self.motor_directions[i]  # Joint → Motor frame
-                self._send_mit_command(
-                    self.can1_socket, motor_id,
-                    motor_pos, 0.0, self.slave_follow_kp, self.slave_follow_kd, 0.0)
-        
-        # Periodic debug logging (every 2 seconds at 50Hz = every 100 frames)
-        if not hasattr(self, '_ms_follow_count'):
-            self._ms_follow_count = 0
-        self._ms_follow_count += 1
-        if self._ms_follow_count % 100 == 1:
-            if master_positions is not None:
-                pos_str = ', '.join([f'{p:.3f}' for p in master_positions])
-                m7_str = f'{self.motor7_position:.3f}' if self.motor7_valid else 'N/A'
-                self.get_logger().info(
-                    f'[主从跟随-CAN] L1-L6=[{pos_str}] L7={m7_str} '
-                    f'Kp={self.slave_follow_kp} Kd={self.slave_follow_kd}')
+        if master_positions is None:
+            return
+
+        # Optional EMA smoothing on master positions (alpha=1.0 means pass-through)
+        alpha = self.ms_smoothing_alpha
+        if alpha < 1.0:
+            if self._smoothed_ms_positions is None:
+                self._smoothed_ms_positions = list(master_positions)
             else:
-                self.get_logger().warn(
-                    f'[主从跟随-CAN] master_positions=None | '
-                    f'joint_names={self.master_joint_names_ms}')
-        
-        # === Motor 7 (gripper): can0 zero torque + can1 position follow ===
-        # Read Motor 7 feedback from can0
-        self._read_motor7_feedback()
-        
-        # can0 Motor 7: pure zero torque (Kp=0, Kd=0, torque=0) - draggable
-        if self.can_socket is not None:
-            self._send_mit_command(
-                self.can_socket, self.gripper_motor_id,
-                0.0, 0.0, 0.0, 0.0, 0.0)
-        
-        # can1 Motor 7: position follow
-        if self.can1_socket is not None and self.motor7_valid:
-            self._send_mit_command(
-                self.can1_socket, self.gripper_motor_id,
-                self.motor7_position, 0.0,
-                self.slave_follow_kp, self.slave_follow_kd, 0.0)
+                self._smoothed_ms_positions = [
+                    alpha * cur + (1.0 - alpha) * prev
+                    for cur, prev in zip(master_positions, self._smoothed_ms_positions)
+                ]
+            master_positions = list(self._smoothed_ms_positions)
 
-    def _slave_can_go_zero_tick(self):
-        """CAN-based slave arm go-zero: send one S-curve interpolated frame for all 7 motors"""
-        if self.can1_socket is None or not self._slave_can_going_zero:
+        # Extract hardware-filtered velocities for feedforward
+        master_velocities = self._extract_joint_velocities(
+            self.master_joint_state_ms, self.master_joint_names_ms)
+        arm_velocities = list(master_velocities[:6]) if master_velocities else None
+
+        if not (self._slave_sdk and self._slave_sdk._connected):
+            self.get_logger().warn('从臂 SDK 不可用，跳过主从跟随', throttle_duration_sec=5.0)
             return
-        
-        self._slave_zero_frame += 1
-        if self._slave_zero_frame > self._slave_zero_total_frames:
-            self._slave_can_going_zero = False
-            self.get_logger().info('从臂（can1）CAN 回零完成')
-            return
-        
-        # S-curve interpolation (same formula as _generate_zero_trajectory)
-        t_frac = self._slave_zero_frame / self._slave_zero_total_frames
-        alpha = 0.5 * (1.0 - math.cos(math.pi * t_frac))
-        
-        for i, start_pos in enumerate(self._slave_zero_start_positions):
-            motor_id = i + 1  # Motors 1-7
-            target_pos = start_pos * (1.0 - alpha)  # Interpolate to zero
-            self._send_mit_command(
-                self.can1_socket, motor_id,
-                target_pos, 0.0, self.slave_follow_kp, self.slave_follow_kd, 0.0)
 
-    def _enable_motor_on_socket(self, can_socket, motor_id):
-        """Enable motor on specified CAN socket (comm type 3)"""
-        host_can_id = 253  # 0xFD
-        comm_type = 3
-        can_id = (comm_type << 24) | (host_can_id << 8) | motor_id
-        can_id |= 0x80000000  # Extended frame flag
-        data = bytes(8)
-        frame = struct.pack('=IB3x8s', can_id, 8, data)
-        can_socket.send(frame)
+        # Compute actual dt from callback timing
+        now = self.get_clock().now()
+        if not hasattr(self, '_ms_last_stamp'):
+            self._ms_last_stamp = now
+        dt_duration = now - self._ms_last_stamp
+        dt = max(dt_duration.nanoseconds / 1e9, 1e-4)  # guard against zero
+        self._ms_last_stamp = now
 
-    def _send_mit_command(self, can_socket, motor_id, position, velocity, kp, kd, torque):
-        """Send MIT control mode command to motor via specified CAN socket"""
-        try:
-            pos_raw = self._float_to_uint16(position, self.P_MIN, self.P_MAX)
-            vel_raw = self._float_to_uint16(velocity, self.V_MIN, self.V_MAX)
-            kp_raw = self._float_to_uint16(kp, self.KP_MIN, self.KP_MAX)
-            kd_raw = self._float_to_uint16(kd, self.KD_MIN, self.KD_MAX)
-            torque_raw = self._float_to_uint16(torque, self.T_MIN, self.T_MAX)
-            
-            comm_type = 1
-            can_id = (comm_type << 24) | (torque_raw << 8) | motor_id
-            can_id |= 0x80000000  # Extended frame flag
-            
-            data = struct.pack('>HHHH', pos_raw, vel_raw, kp_raw, kd_raw)
-            frame = struct.pack('=IB3x8s', can_id, 8, data)
-            can_socket.send(frame)
-        except Exception as e:
-            self.get_logger().debug(f'MIT command 发送失败：{e}')
+        # Safety velocity clamping
+        max_joint_vel = 8.0  # rad/s
+        max_delta = max_joint_vel * dt
+        if self._last_slave_cmd is not None:
+            for i in range(len(master_positions)):
+                delta = master_positions[i] - self._last_slave_cmd[i]
+                if abs(delta) > max_delta:
+                    master_positions[i] = self._last_slave_cmd[i] + max_delta * (1.0 if delta > 0 else -1.0)
+        self._last_slave_cmd = list(master_positions)
 
-    def _float_to_uint16(self, x, x_min, x_max):
-        """Float to uint16 conversion (MIT mode encoding)"""
-        x = max(x_min, min(x_max, x))
-        return int((x - x_min) * 65535.0 / (x_max - x_min))
+        dt_ns = max(int(dt * 1e9), 1_000_000)  # at least 1ms
+        self._slave_sdk.JointCtrlList(
+            master_positions, duration_ns=dt_ns, velocities=arm_velocities)
 
-    def _uint16_to_float(self, x_int, x_min, x_max):
-        """uint16 to float conversion (MIT mode decoding)"""
-        return x_min + (x_max - x_min) * x_int / 65535.0
-
-    def _read_motor7_feedback(self):
-        """Read Motor 7 feedback from can0 (non-blocking), update self.motor7_position"""
-        if self.can_socket is None:
-            return
-        
-        for _ in range(50):  # Read up to 50 frames to drain buffer
-            try:
-                frame_data = self.can_socket.recv(16)
-                can_id_raw, dlc = struct.unpack_from('=IB', frame_data, 0)
-                data = frame_data[8:16]
-                
-                can_id = can_id_raw & 0x1FFFFFFF  # Remove extended frame flag
-                comm_type = (can_id >> 24) & 0x3F
-                motor_id = (can_id >> 8) & 0xFF
-                
-                if comm_type == 2 and motor_id == self.gripper_motor_id:
-                    pos_raw = (data[0] << 8) | data[1]
-                    self.motor7_position = self._uint16_to_float(
-                        pos_raw, self.P_MIN, self.P_MAX)
-                    self.motor7_valid = True
-            except BlockingIOError:
-                break
-            except Exception:
-                break
+        self._ms_follow_count += 1
+        if self._ms_follow_count % 200 == 1:
+            pos_str = ', '.join([f'{p:.3f}' for p in master_positions])
+            self.get_logger().info(
+                f'[主从跟随-SDK] dt={dt*1000:.1f}ms L1-L7=[{pos_str}]')
 
     def update_callback(self):
         """Periodic update callback"""
@@ -1330,48 +987,28 @@ class XboxTeleopNode(Node):
                 self.toggle_master_slave_mode()
             self.last_menu_button = menu_button
         
-        # D-pad: control gripper motor (ID=7) torque (skip in master-slave mode)
-        # Xbox D-pad: axes[6]=left/right, axes[7]=up/down (up=1, down=-1)
-        if len(joy.axes) >= 8 and self.can_socket is not None and not self.master_slave_mode:
+        # D-pad: control gripper via L7_joint position (skip in master-slave mode)
+        if len(joy.axes) >= 8 and not self.master_slave_mode:
             dpad_vertical = joy.axes[7]  # Up=1, down=-1
             
-            # D-pad up: increase torque
             dpad_up = 1 if dpad_vertical > 0.5 else 0
             if dpad_up == 1 and self.last_dpad_up == 0:
-                self.gripper_torque = self.gripper_torque_step
-                self.send_gripper_torque(self.gripper_torque)
-                self.get_logger().info(f'夹爪力矩：+{self.gripper_torque:.2f} Nm')
-            elif dpad_up == 0 and self.last_dpad_up == 1:
-                # Send zero torque when released
-                self.gripper_torque = 0.0
-                self.send_gripper_torque(0.0)
+                self.gripper_target_angle += self.gripper_angle_step
+                self.gripper_target_angle = min(self.gripper_target_angle, 1.5708)
+                self._send_gripper_position(self.gripper_target_angle)
+                self.get_logger().info(f'夹爪角度：{self.gripper_target_angle:.2f} rad')
             self.last_dpad_up = dpad_up
             
-            # D-pad down: decrease torque
             dpad_down = 1 if dpad_vertical < -0.5 else 0
             if dpad_down == 1 and self.last_dpad_down == 0:
-                self.gripper_torque = -self.gripper_torque_step
-                self.send_gripper_torque(self.gripper_torque)
-                self.get_logger().info(f'夹爪力矩：{self.gripper_torque:.2f} Nm')
-            elif dpad_down == 0 and self.last_dpad_down == 1:
-                # Send zero torque when released
-                self.gripper_torque = 0.0
-                self.send_gripper_torque(0.0)
+                self.gripper_target_angle -= self.gripper_angle_step
+                self.gripper_target_angle = max(self.gripper_target_angle, -1.5708)
+                self._send_gripper_position(self.gripper_target_angle)
+                self.get_logger().info(f'夹爪角度：{self.gripper_target_angle:.2f} rad')
             self.last_dpad_down = dpad_down
-            
-        # CAN-based slave go-zero tick (runs during entering_master_slave phase)
-        if self._slave_can_going_zero:
-            self._slave_can_go_zero_tick()
-        elif self.entering_master_slave and self.can1_socket is not None:
-            # Go-zero complete but still waiting for timer: hold can1 motors at zero
-            for motor_id in range(1, 8):
-                self._send_mit_command(
-                    self.can1_socket, motor_id,
-                    0.0, 0.0, self.slave_follow_kp, self.slave_follow_kd, 0.0)
         
-        # In master-slave mode: follow master, skip normal controller input
+        # In master-slave mode: follow is driven by joint_state callback, skip normal input
         if self.master_slave_mode:
-            self._master_slave_follow()
             return
         if self.entering_master_slave:
             return
@@ -1389,7 +1026,8 @@ class XboxTeleopNode(Node):
                     self.get_logger().warn(f'home/零位超时（{elapsed:.1f}s），正在重置状态并恢复控制')
                     self.is_going_home = False
                     self.home_start_time = None
-                    self.pose_initialized = False  # Resync pose
+                    self.pose_initialized = False
+                    self._ik_smooth_target = None
                 else:
                     return
             else:
@@ -1453,11 +1091,10 @@ class XboxTeleopNode(Node):
         has_rotation = abs(dyaw) > rotation_threshold or abs(dpitch) > rotation_threshold or abs(droll) > rotation_threshold
         
         if not has_translation and not has_rotation:
-            # [Change] Keep computing IK even without input, to keep debug topic updated
-            # and observe IK stability at rest.
             if self.use_fast_ik_mode and self.pose_initialized:
-                self.send_cartesian_goal()  # Keep IK computing current target pose
-            return  # No valid input, skip target update
+                self.send_cartesian_goal()
+            self._send_fixed_rate_ik_command()
+            return
         
         # Accumulate deltas
         self.pending_dx += dx
@@ -1541,9 +1178,12 @@ class XboxTeleopNode(Node):
         self.target_pose.header.stamp = self.get_clock().now().to_msg()
         self.target_pose_pub.publish(self.target_pose)
         
-        # Send motion command
+        # Send motion command (triggers async IK request)
         self.send_cartesian_goal()
-        
+
+        # Fixed-rate IK command output (consumes buffered IK result)
+        self._send_fixed_rate_ik_command()
+
     def pose_changed_significantly(self):
         """Check if target pose changed significantly"""
         if self.last_sent_pose is None:
@@ -1573,154 +1213,168 @@ class XboxTeleopNode(Node):
             self.send_cartesian_path_goal()
     
     def send_ik_goal(self):
-        """Compute joints via IK service and publish trajectory - 50Hz fast mode"""
-        # Allow overriding old requests, but avoid queue buildup
+        """Compute joints via IK service (SDK) and publish trajectory - 50Hz fast mode.
+        
+        At most one IK request is in flight at a time. If called while a
+        previous request is pending, the latest target pose is marked for
+        automatic re-send once the current callback completes.
+        """
+        import time as _time
+
         if self.pending_ik_request:
-            return  # Previous IK request still processing
+            if hasattr(self, '_ik_request_time') and (_time.time() - self._ik_request_time) > 0.5:
+                self.get_logger().warn('IK 请求超时 0.5s，强制重置', throttle_duration_sec=2.0)
+                self.pending_ik_request = False
+            else:
+                self._ik_resend_needed = True
+                return
+        self._ik_resend_needed = False
         
-        # Debug log
-        self.get_logger().debug('正在发送 IK 请求...')
-        
-        # Build IK request
-        request = GetPositionIK.Request()
-        request.ik_request.group_name = self.planning_group
-        request.ik_request.robot_state.is_diff = False  # Use full state, not diff
-        
-        # [Key fix] Use last successful IK solution as seed to keep continuity
-        # This avoids pose jumps from gravity sag.
-        if self.last_ik_joint_positions is not None:
-            # Use last IK solution as seed
-            seed_state = JointState()
-            seed_state.name = self.joint_names
-            seed_state.position = self.last_ik_joint_positions
-            request.ik_request.robot_state.joint_state = seed_state
-        elif self.current_joint_state:
-            # First time: use current joint state
-            request.ik_request.robot_state.joint_state = self.current_joint_state
-        
-        # Set target end-effector pose
-        request.ik_request.pose_stamped.header.frame_id = self.base_frame
-        request.ik_request.pose_stamped.header.stamp = self.get_clock().now().to_msg()
-        request.ik_request.pose_stamped.pose = self.target_pose.pose
-        
-        # Set timeout (short to keep high rate)
-        request.ik_request.timeout.sec = 0
-        request.ik_request.timeout.nanosec = 10_000_000  # 10ms timeout
-        
-        # Set collision checking
-        request.ik_request.avoid_collisions = self.collision_check_active
-        
-        # Call IK service asynchronously
-        self.pending_ik_request = True
-        future = self.ik_client.call_async(request)
-        future.add_done_callback(self.ik_callback)
-    
-    def ik_callback(self, future):
-        """IK completion callback - publish joint trajectory"""
-        self.pending_ik_request = False
-        
-        # Skip if in master-slave mode or transitioning (avoid overriding zero trajectory)
-        if self.master_slave_mode or self.entering_master_slave:
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().warn('SDK 未连接，跳过 IK 请求', throttle_duration_sec=5.0)
             return
         
+        seed = self.last_ik_joint_positions
+        if seed is None and self.current_joint_state:
+            seed = []
+            for name in self.joint_names:
+                if name in self.current_joint_state.name:
+                    idx = self.current_joint_state.name.index(name)
+                    seed.append(self.current_joint_state.position[idx])
+                else:
+                    seed.append(0.0)
+        
+        self.pending_ik_request = True
+        self._ik_request_time = _time.time()
+        try:
+            future = self._master_sdk.ComputeIKAsync(
+                target_pose=self.target_pose.pose,
+                seed_positions=seed,
+                avoid_collisions=self.collision_check_active,
+                timeout_ns=10_000_000,
+            )
+            future.add_done_callback(self.ik_callback)
+        except Exception as e:
+            self.pending_ik_request = False
+            self.get_logger().error(f'ComputeIKAsync 调用失败：{e}')
+    
+    def ik_callback(self, future):
+        """IK completion callback - store result in buffer for fixed-rate output.
+
+        Does NOT send motor commands; the 50Hz timer consumes _latest_ik_raw.
+        """
+        self.pending_ik_request = False
+
+        if self.master_slave_mode or self.entering_master_slave:
+            return
+
         try:
             response = future.result()
-            
-            # Check IK success (SUCCESS = 1)
+
             if response.error_code.val != 1:
-                # IK failed, target may be unreachable
                 self.get_logger().debug(f'IK 失败：error_code={response.error_code.val}')
                 return
-            
-            # Extract joint positions
+
             solution = response.solution.joint_state
             ik_positions = []
-            
             for joint_name in self.joint_names:
                 if joint_name in solution.name:
                     idx = solution.name.index(joint_name)
                     ik_positions.append(solution.position[idx])
                 else:
-                    return  # Missing joint data
-            
-            # [Debug] Publish raw IK solution (before any processing)
+                    return
+
             self.publish_ik_raw_debug(ik_positions)
-            
-            # Check if IK solution change is too small or too large
+
+            # Singularity / jump protection (compare against last accepted IK)
             if self.last_ik_joint_positions is not None:
-                max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i]) for i in range(len(ik_positions)))
-                
-                # Change too small, skip
+                max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i])
+                               for i in range(len(ik_positions)))
+
                 if max_diff < 0.0001:
                     return
-                
-                # [Singularity protection] Too large change -> reject IK solution
-                # If IK seed just initialized, skip first-frame check to set baseline
+
                 if max_diff > self.max_ik_jump_threshold:
                     if self.ik_seed_just_initialized:
-                        # First frame: accept IK solution, clear flag
-                        self.get_logger().info(f'IK 种子初始化后的首帧：接受 IK 解（diff={max_diff:.3f}rad）')
+                        self.get_logger().info(
+                            f'IK 种子初始化后的首帧：接受 IK 解（diff={max_diff:.3f}rad）')
                         self.ik_seed_just_initialized = False
                     else:
                         self.consecutive_ik_rejects += 1
                         if self.consecutive_ik_rejects >= self.singularity_warning_count:
                             self.get_logger().warn(
-                                f'疑似奇异区：IK 跳变={max_diff:.3f}rad，已保护 {self.consecutive_ik_rejects} 帧'
-                            )
-                        # [Auto recovery] Re-sync IK seed after 50 consecutive rejects
+                                f'疑似奇异区：IK 跳变={max_diff:.3f}rad，'
+                                f'已保护 {self.consecutive_ik_rejects} 帧')
                         if self.consecutive_ik_rejects >= 50:
-                            self.get_logger().warn('IK 解已连续拒绝 50+ 帧，自动重新同步位姿...')
+                            self.get_logger().warn(
+                                'IK 解已连续拒绝 50+ 帧，自动重新同步位姿...')
                             self.pose_initialized = False
                             self.smoothed_joint_positions = None
                             self.last_ik_joint_positions = None
+                            self._ik_smooth_target = None
                             self.consecutive_ik_rejects = 0
-                        # Reject this solution and keep last joint positions
                         return
                 else:
-                    # IK solution ok: reset counters and flags
                     if self.consecutive_ik_rejects > 0:
                         self.consecutive_ik_rejects = 0
                     if self.ik_seed_just_initialized:
                         self.ik_seed_just_initialized = False
-            
-            # [Key] Apply joint output smoothing
-            # Avoid mechanical shocks from IK jumps
-            target_positions = self.smooth_joint_positions(ik_positions)
-            self.last_ik_joint_positions = target_positions
-            
-            # [Debug] Publish IK solution to /debug/ik_solution
-            self.publish_ik_debug(target_positions)
-            
-            # Build and publish joint trajectory
-            trajectory = JointTrajectory()
-            trajectory.header.stamp = self.get_clock().now().to_msg()
-            trajectory.joint_names = self.joint_names
-            
-            # Single-point trajectory - short time lets hardware smooth
-            point = JointTrajectoryPoint()
-            point.positions = target_positions
-            point.velocities = [0.0] * 6  # Target velocity is 0
-            point.time_from_start.sec = 0
-            point.time_from_start.nanosec = 20_000_000  # 20ms (50Hz)
-            
-            trajectory.points = [point]
-            
-            # Publish trajectory directly to controller
-            self.joint_trajectory_pub.publish(trajectory)
-            
-            # Count IK successes
-            if not hasattr(self, 'ik_success_count'):
-                self.ik_success_count = 0
-            self.ik_success_count += 1
-            if self.ik_success_count % 50 == 0:  # Log every 50
-                self.get_logger().info(f'IK 控制：已发送 {self.ik_success_count} 条轨迹指令')
-            
-            # Update last sent pose (for change detection)
+
+            # Store accepted IK result for the 50Hz timer to consume
+            self._latest_ik_raw = list(ik_positions)
+            self._latest_ik_consumed = False
+
             self.last_sent_pose = copy.deepcopy(self.target_pose)
-            
+
         except Exception as e:
             self.get_logger().error(f'IK 回调异常：{e}')
-    
+
+        if self._ik_resend_needed:
+            self._ik_resend_needed = False
+            self.send_ik_goal()
+
+    def _send_fixed_rate_ik_command(self):
+        """Consume buffered IK result and send motor command at fixed 50Hz rate.
+
+        Called from the timer so command timing is decoupled from IK latency.
+        """
+        if self.master_slave_mode or self.entering_master_slave:
+            return
+        if self.is_going_home:
+            return
+        if self.zero_torque_mode:
+            return
+
+        if self._latest_ik_raw is not None and not self._latest_ik_consumed:
+            self._latest_ik_consumed = True
+            if self._ik_smooth_target is None:
+                self._ik_smooth_target = list(self._latest_ik_raw)
+            else:
+                ik_ema = 0.5
+                self._ik_smooth_target = [
+                    ik_ema * raw + (1.0 - ik_ema) * prev
+                    for raw, prev in zip(self._latest_ik_raw, self._ik_smooth_target)
+                ]
+
+        if self._ik_smooth_target is not None:
+            target_positions = self.smooth_joint_positions(self._ik_smooth_target)
+            self.publish_ik_debug(target_positions)
+        else:
+            return
+
+        ik_velocities = None
+        if self.last_ik_joint_positions is not None and self.dt > 0:
+            ik_velocities = [
+                (target_positions[i] - self.last_ik_joint_positions[i]) / self.dt
+                for i in range(len(target_positions))
+            ]
+        self.last_ik_joint_positions = target_positions
+
+        if self._master_sdk and self._master_sdk._connected:
+            self._master_sdk.JointCtrlList(
+                target_positions, duration_ns=20_000_000,
+                velocities=ik_velocities)
+
     def smooth_joint_positions(self, target_positions):
         """Smooth IK joint positions (critical damping + deadzone).
         
@@ -1764,7 +1418,7 @@ class XboxTeleopNode(Node):
             # [Improvement 2] Critical damping: desired_velocity considers current velocity
             # PD-like: v_desired = Kp * pos_error - Kd * current_velocity
             # Here Kp is alpha/dt, Kd is damping coefficient.
-            damping = 0.7  # Damping coefficient, ~critical damping
+            damping = 0.5  # Damping coefficient, slightly underdamped for faster response
             
             # Desired velocity = position error term - damping term
             desired_velocity = alpha * pos_error / self.dt - damping * current_velocity
@@ -1796,24 +1450,6 @@ class XboxTeleopNode(Node):
         self.last_joint_velocities = new_velocities
         return smoothed
     
-    def send_joint_positions(self, positions):
-        """Send joint positions to controller directly (no IK)"""
-        # Build and publish joint trajectory
-        trajectory = JointTrajectory()
-        trajectory.header.stamp = self.get_clock().now().to_msg()
-        trajectory.joint_names = self.joint_names
-        
-        # Single-point trajectory - short execution time
-        point = JointTrajectoryPoint()
-        point.positions = list(positions)
-        point.velocities = [0.0] * 6
-        point.time_from_start.sec = 0
-        point.time_from_start.nanosec = 20_000_000  # 20ms
-        
-        trajectory.points = [point]
-        
-        # Publish trajectory
-        self.joint_trajectory_pub.publish(trajectory)
     
     def publish_ik_debug(self, positions):
         """Publish IK debug info to /debug/ik_solution (continuous, even without input)"""
@@ -1864,10 +1500,8 @@ class XboxTeleopNode(Node):
         self.ik_raw_solution_pub.publish(ik_raw_msg)
     
     def send_cartesian_path_goal(self):
-        """Plan Cartesian path with MoveIt (traditional mode) for RViz update and precision"""
-        # Check if moving (with timeout)
+        """Plan Cartesian path with MoveIt via SDK (traditional mode)"""
         if self.is_moving:
-            # Timeout check to avoid permanent block
             if self.move_start_time is not None:
                 elapsed = (self.get_clock().now() - self.move_start_time).nanoseconds / 1e9
                 if elapsed > self.move_timeout:
@@ -1878,165 +1512,61 @@ class XboxTeleopNode(Node):
             else:
                 return
         
-        # Mark as moving
+        if not self._master_sdk or not self._master_sdk._connected:
+            self.get_logger().warn('SDK 未连接，跳过笛卡尔路径规划', throttle_duration_sec=5.0)
+            return
+        
         self.is_moving = True
         self.move_start_time = self.get_clock().now()
         
-        # Create Cartesian path request
-        request = GetCartesianPath.Request()
-        request.header.stamp = self.get_clock().now().to_msg()
-        request.header.frame_id = self.base_frame
-        request.group_name = self.planning_group
-        request.link_name = self.end_effector_frame
-        
-        # Set waypoints - target only
         waypoint = Pose()
         waypoint.position = self.target_pose.pose.position
         waypoint.orientation = self.target_pose.pose.orientation
-        request.waypoints = [waypoint]
         
-        # Set parameters
-        request.max_step = 0.01  # 10mm step
-        request.jump_threshold = 0.0  # Disable jump detection
-        request.avoid_collisions = self.collision_check_active  # Enable collision checking by state
-        
-        # Call service asynchronously
-        future = self.cartesian_path_client.call_async(request)
-        future.add_done_callback(self.cartesian_path_callback)
-        
-    def cartesian_path_callback(self, future):
-        """Cartesian path planning callback"""
-        try:
-            response = future.result()
-            
-            if response.fraction < 0.9:
-                self.is_moving = False
-                return
-            
-            # Get planned trajectory
-            trajectory = response.solution
-            
-            # Speed up trajectory execution
-            self.scale_trajectory_speed(trajectory, 5.0)
-            
-            # Execute trajectory
-            goal_msg = ExecuteTrajectory.Goal()
-            goal_msg.trajectory = trajectory
-            
-            send_goal_future = self.execute_trajectory_client.send_goal_async(goal_msg)
-            send_goal_future.add_done_callback(self.execute_response_callback)
-            
-        except Exception as e:
-            self.is_moving = False
+        self._master_sdk.PlanCartesianPathAsync(
+            waypoints=[waypoint],
+            avoid_collisions=self.collision_check_active,
+            result_callback=self._on_cartesian_complete,
+        )
     
-    def scale_trajectory_speed(self, trajectory, speed_scale):
-        """Scale trajectory speed - speed_scale > 1 faster, < 1 slower"""
-        if speed_scale <= 0:
-            return
-        
-        for point in trajectory.joint_trajectory.points:
-            # Compute new time (speed_scale > 1 shorter time, < 1 longer)
-            total_nsec = point.time_from_start.sec * 1e9 + point.time_from_start.nanosec
-            new_total_nsec = total_nsec / speed_scale
-            point.time_from_start.sec = int(new_total_nsec // 1e9)
-            point.time_from_start.nanosec = int(new_total_nsec % 1e9)
-            
-            # Scale velocities (speed_scale > 1 higher)
-            point.velocities = [v * speed_scale for v in point.velocities]
-            
-            # Scale accelerations (speed_scale > 1 higher)
-            if point.accelerations:
-                point.accelerations = [a * speed_scale * speed_scale for a in point.accelerations]
-    
-    def execute_response_callback(self, future):
-        """Execute trajectory response callback"""
-        try:
-            goal_handle = future.result()
-            
-            if not goal_handle.accepted:
-                self.get_logger().warn('轨迹执行请求被拒绝')
-                self.is_moving = False
-                return
-                
-            # Wait for execution result
-            result_future = goal_handle.get_result_async()
-            result_future.add_done_callback(self.execute_result_callback)
-        except Exception as e:
-            self.get_logger().error(f'执行响应回调异常：{e}')
-            self.is_moving = False
-        
-    def execute_result_callback(self, future):
-        """Execute result callback"""
-        try:
-            result = future.result().result
-            self.is_moving = False
-            
-            if result.error_code.val == result.error_code.SUCCESS:
-                # Update last sent pose
-                self.last_sent_pose = copy.deepcopy(self.target_pose)
-            else:
-                self.get_logger().warn(f'运动失败：error_code={result.error_code.val}')
-        except Exception as e:
-            self.get_logger().error(f'执行结果回调异常：{e}')
-            self.is_moving = False
+    def _on_cartesian_complete(self, success):
+        """Cartesian path execution complete callback"""
+        self.is_moving = False
+        if success:
+            self.last_sent_pose = copy.deepcopy(self.target_pose)
+        else:
+            self.get_logger().debug('笛卡尔路径执行失败')
 
 
-    def enable_gripper_motor(self):
-        """Enable gripper motor (ID=7)"""
-        if self.can_socket is None:
-            return False
-        
-        try:
-            motor_id = self.gripper_motor_id  # 7
-            host_can_id = 253  # 0xFD - host CAN ID
-            comm_type = 3  # Communication type 3: enable motor
-            
-            # Build 29-bit extended CAN ID: (comm_type << 24) | (host_can_id << 8) | motor_id
-            can_id = (comm_type << 24) | (host_can_id << 8) | motor_id
-            can_id |= 0x80000000  # Set extended frame flag
-            
-            # Build 8-byte data (all zeros)
-            data = bytes(8)
-            
-            # Build CAN frame
-            frame = struct.pack('=IB3x8s', can_id, 8, data)
-            
-            # Send
-            self.can_socket.send(frame)
-            self.gripper_enabled = True
-            self.get_logger().info(f'夹爪电机已使能（ID={motor_id}）')
-            return True
-            
-        except Exception as e:
-            self.get_logger().error(f'使能夹爪电机失败：{e}')
-            return False
-
-    def send_gripper_torque(self, torque):
-        """
-        Send torque command to gripper motor (ID=7) on can0
-        position=0, velocity=0, kp=0, kd=0, torque=specified value
-        """
-        if self.can_socket is None:
-            return False
-        try:
-            self._send_mit_command(
-                self.can_socket, self.gripper_motor_id,
-                0.0, 0.0, 0.0, 0.0, torque)
-            return True
-        except Exception as e:
-            self.get_logger().error(f'发送夹爪指令失败：{e}')
-            return False
+    def _send_gripper_position(self, angle):
+        """Send gripper position via SDK GripperCtrl"""
+        if self._master_sdk and self._master_sdk._connected:
+            self._master_sdk.GripperCtrl(gripper_angle=float(angle))
+        else:
+            self.get_logger().warn('SDK 未连接，跳过夹爪控制')
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = XboxTeleopNode()
-    
+
+    from rclpy.executors import MultiThreadedExecutor
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+
+    if node._master_sdk and node._master_sdk.get_node():
+        executor.add_node(node._master_sdk.get_node())
+        node.get_logger().info('共享 executor：已添加主臂 SDK 节点')
+    if node._slave_sdk and node._slave_sdk.get_node():
+        executor.add_node(node._slave_sdk.get_node())
+        node.get_logger().info('共享 executor：已添加从臂 SDK 节点')
+
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

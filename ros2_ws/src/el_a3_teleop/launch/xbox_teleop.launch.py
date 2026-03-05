@@ -4,11 +4,13 @@ Xbox Controller Launch File
 Launches joy node and xbox_teleop node
 """
 
+import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
@@ -35,7 +37,7 @@ def generate_launch_description():
         executable='joy_node',
         name='joy_node',
         parameters=[{
-            'device_id': LaunchConfiguration('device'),
+            'device_id': 0,
             'deadzone': 0.05,
             'autorepeat_rate': 20.0,
         }],
@@ -51,7 +53,17 @@ def generate_launch_description():
         output='screen'
     )
     
+    no_shm_xml = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.realpath(__file__))))),
+        'fastrtps_no_shm.xml')
+    if not os.path.isfile(no_shm_xml):
+        no_shm_xml = '/home/wy/RS/A3/ros2_ws/fastrtps_no_shm.xml'
+    set_fastrtps_env = SetEnvironmentVariable(
+        'FASTRTPS_DEFAULT_PROFILES_FILE', no_shm_xml)
+
     return LaunchDescription([
+        set_fastrtps_env,
         device_arg,
         config_file_arg,
         joy_node,

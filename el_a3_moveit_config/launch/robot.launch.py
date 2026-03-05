@@ -6,7 +6,7 @@ Launches MoveIt motion planning with real hardware control
 
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
@@ -49,6 +49,14 @@ def generate_launch_description():
     
     declared_arguments.append(
         DeclareLaunchArgument(
+            "wrist_motor_type",
+            default_value="RS05",
+            description="Wrist motor type: RS05 or EL05",
+        )
+    )
+
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
             description="Start RViz2 with MoveIt plugin",
@@ -57,6 +65,7 @@ def generate_launch_description():
 
     can_interface = LaunchConfiguration("can_interface")
     host_can_id = LaunchConfiguration("host_can_id")
+    wrist_motor_type = LaunchConfiguration("wrist_motor_type")
     use_rviz = LaunchConfiguration("use_rviz")
 
     # Get URDF via xacro (real hardware)
@@ -72,6 +81,8 @@ def generate_launch_description():
             can_interface,
             " host_can_id:=",
             host_can_id,
+            " wrist_motor_type:=",
+            wrist_motor_type,
         ]
     )
     robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
@@ -165,6 +176,13 @@ def generate_launch_description():
                    "--controller-manager-timeout", "120"],
     )
 
+    gripper_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["gripper_controller", "-c", "/controller_manager",
+                   "--controller-manager-timeout", "120"],
+    )
+
     # Move group - delay start until controllers are ready
     move_group_node = Node(
         package="moveit_ros_move_group",
@@ -201,7 +219,7 @@ def generate_launch_description():
     delay_arm_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
-            on_exit=[arm_controller_spawner],
+            on_exit=[arm_controller_spawner, gripper_controller_spawner],
         )
     )
 
@@ -222,5 +240,13 @@ def generate_launch_description():
         rviz_node,
     ]
 
-    return LaunchDescription(declared_arguments + nodes)
+    no_shm_xml = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
+        'ros2_ws', 'fastrtps_no_shm.xml')
+    if not os.path.isfile(no_shm_xml):
+        no_shm_xml = '/home/wy/RS/A3/ros2_ws/fastrtps_no_shm.xml'
+    set_fastrtps_env = SetEnvironmentVariable(
+        'FASTRTPS_DEFAULT_PROFILES_FILE', no_shm_xml)
+
+    return LaunchDescription([set_fastrtps_env] + declared_arguments + nodes)
 

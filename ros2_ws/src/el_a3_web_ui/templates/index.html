@@ -82,6 +82,40 @@
                 <!-- Tab Content: Status -->
                 <div class="tab-content active" id="tab-status">
                     <div class="section">
+                        <h3>SDK 状态</h3>
+                        <div class="sdk-status-card" id="sdkStatusCard">
+                            <div class="sdk-status-row">
+                                <span class="sdk-label">SDK 版本</span>
+                                <span class="sdk-value" id="sdkVersion">--</span>
+                            </div>
+                            <div class="sdk-status-row">
+                                <span class="sdk-label">臂状态</span>
+                                <span class="sdk-value" id="sdkArmState">--</span>
+                            </div>
+                            <div class="sdk-status-row">
+                                <span class="sdk-label">夹爪角度</span>
+                                <span class="sdk-value" id="sdkGripperAngle">--</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <h3>末端位姿</h3>
+                        <table class="state-table" id="endEffectorTable">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left">参数</th>
+                                    <th>X</th><th>Y</th><th>Z</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>位置 (m)</td><td id="eeX">--</td><td id="eeY">--</td><td id="eeZ">--</td></tr>
+                                <tr><td>姿态 (°)</td><td id="eeRX">--</td><td id="eeRY">--</td><td id="eeRZ">--</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="section">
                         <h3>关节状态</h3>
                         <table class="state-table" id="jointStateTable">
                             <thead>
@@ -129,16 +163,73 @@
                     </div>
                     
                     <div class="section">
+                        <h3>夹爪控制</h3>
+                        <div class="gripper-control" id="gripperControl">
+                            <div class="slider-header">
+                                <span class="joint-label">L7 (夹爪)</span>
+                                <span class="joint-value" id="gripperValue">0.0°</span>
+                            </div>
+                            <div class="slider-row">
+                                <span class="limit-label">0°</span>
+                                <input type="range" id="gripperSlider" min="0" max="90" value="0" step="1" class="joint-range gripper-range">
+                                <span class="limit-label">90°</span>
+                            </div>
+                            <div class="slider-input-row">
+                                <input type="number" id="gripperInput" value="0" min="0" max="90" step="1" class="joint-input">
+                                <button class="btn btn-small btn-send" id="gripperSendBtn">发送</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
                         <h3>预设位姿</h3>
                         <div class="preset-buttons">
                             <button class="btn btn-primary" id="goHomeBtn">
-                                <span class="icon">🏠</span> 回原点
+                                <span class="icon">🏠</span> 回原点 (MoveIt)
+                            </button>
+                            <button class="btn btn-primary" id="goZeroBtn">
+                                <span class="icon">🎯</span> 回零位 (MoveIt)
                             </button>
                             <button class="btn" id="preset1Btn">
                                 <span class="icon">📍</span> 预设位姿1
                             </button>
                             <button class="btn" id="preset2Btn">
                                 <span class="icon">📍</span> 预设位姿2
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <h3>笛卡尔位姿控制</h3>
+                        <div class="cartesian-control" id="cartesianControl">
+                            <div class="cartesian-grid">
+                                <div class="param-row">
+                                    <label>X (m)</label>
+                                    <input type="number" id="cartX" value="0.3" step="0.01" class="joint-input">
+                                </div>
+                                <div class="param-row">
+                                    <label>Y (m)</label>
+                                    <input type="number" id="cartY" value="0.0" step="0.01" class="joint-input">
+                                </div>
+                                <div class="param-row">
+                                    <label>Z (m)</label>
+                                    <input type="number" id="cartZ" value="0.3" step="0.01" class="joint-input">
+                                </div>
+                                <div class="param-row">
+                                    <label>RX (°)</label>
+                                    <input type="number" id="cartRX" value="0" step="1" class="joint-input">
+                                </div>
+                                <div class="param-row">
+                                    <label>RY (°)</label>
+                                    <input type="number" id="cartRY" value="0" step="1" class="joint-input">
+                                </div>
+                                <div class="param-row">
+                                    <label>RZ (°)</label>
+                                    <input type="number" id="cartRZ" value="0" step="1" class="joint-input">
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" id="moveToPoseBtn" style="width:100%;margin-top:8px;">
+                                移动到位姿
                             </button>
                         </div>
                     </div>

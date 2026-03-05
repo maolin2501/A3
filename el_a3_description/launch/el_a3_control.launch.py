@@ -44,6 +44,14 @@ def generate_launch_description():
     
     declared_arguments.append(
         DeclareLaunchArgument(
+            "wrist_motor_type",
+            default_value="EL05",
+            description="Wrist motor type for joints 4-7 (EL05 or RS05)",
+        )
+    )
+
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
             description="Start RViz2",
@@ -54,6 +62,7 @@ def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     can_interface = LaunchConfiguration("can_interface")
     host_can_id = LaunchConfiguration("host_can_id")
+    wrist_motor_type = LaunchConfiguration("wrist_motor_type")
     use_rviz = LaunchConfiguration("use_rviz")
 
     # Get URDF via xacro
@@ -70,6 +79,8 @@ def generate_launch_description():
             can_interface,
             " host_can_id:=",
             host_can_id,
+            " wrist_motor_type:=",
+            wrist_motor_type,
         ]
     )
     robot_description = {"robot_description": robot_description_content}
@@ -126,11 +137,24 @@ def generate_launch_description():
                    "--controller-manager-timeout", "60"],
     )
 
-    # Delay arm_controller spawner after joint_state_broadcaster is active
+    gripper_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["gripper_controller", "--controller-manager", "/controller_manager",
+                   "--controller-manager-timeout", "60"],
+    )
+
     delay_arm_controller_spawner = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
             on_exit=[arm_controller_spawner],
+        )
+    )
+
+    delay_gripper_controller_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=arm_controller_spawner,
+            on_exit=[gripper_controller_spawner],
         )
     )
 
@@ -140,6 +164,7 @@ def generate_launch_description():
         rviz_node,
         joint_state_broadcaster_spawner,
         delay_arm_controller_spawner,
+        delay_gripper_controller_spawner,
     ]
 
     return LaunchDescription(declared_arguments + nodes)

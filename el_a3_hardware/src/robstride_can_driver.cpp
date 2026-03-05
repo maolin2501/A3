@@ -458,7 +458,7 @@ void RobstrideCanDriver::setMotorType(uint8_t motor_id, MotorType type)
   if (motor_id < motor_types_.size()) {
     motor_types_[motor_id] = type;
     std::cout << "[RobstrideCanDriver] Motor " << static_cast<int>(motor_id) 
-              << " 电机型号已设置为 " << (type == MotorType::RS00 ? "RS00" : "EL05") << std::endl;
+              << " 电机型号已设置为 " << motorTypeName(type) << std::endl;
   }
 }
 

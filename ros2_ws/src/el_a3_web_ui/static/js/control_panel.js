@@ -35,28 +35,16 @@ class ControlPanel {
     }
     
     init() {
-        // Wait for joint limits from server
         this.loadJointLimits();
-        
-        // Create sliders
         this.createJointSliders();
-        
-        // Setup preset buttons
         this.setupPresetButtons();
-        
-        // Setup zero torque toggle
+        this.setupGripperControl();
+        this.setupCartesianControl();
         this.setupZeroTorqueToggle();
-        
-        // Setup teleop control
         this.setupTeleopControl();
-        
-        // Setup CAN interface config
         this.setupCANConfig();
-        
-        // Setup log controls
         this.setupLogControls();
-        
-        // Listen for state updates
+
         window.addEventListener('robotStateUpdate', (e) => this.updateFromState(e.detail));
     }
     
@@ -184,22 +172,26 @@ class ControlPanel {
     }
     
     setupPresetButtons() {
-        // Go home button
         const homeBtn = document.getElementById('goHomeBtn');
         if (homeBtn) {
             homeBtn.addEventListener('click', () => {
-                const duration = parseFloat(document.getElementById('motionDuration')?.value || 3.0);
-                sendCommand('go_home', { duration: duration });
-                
-                // Update sliders to home position
+                sendCommand('go_home', { duration: 3.0 });
                 this.targetPositions = [...this.presets.home];
                 this.updateSliders();
-                
-                addLog('执行回原点', 'info');
+                addLog('执行回原点 (MoveIt 规划)', 'info');
             });
         }
-        
-        // Preset 1 button
+
+        const goZeroBtn = document.getElementById('goZeroBtn');
+        if (goZeroBtn) {
+            goZeroBtn.addEventListener('click', () => {
+                sendCommand('go_zero');
+                this.targetPositions = [...this.presets.home];
+                this.updateSliders();
+                addLog('执行回零位 (MoveIt 规划)', 'info');
+            });
+        }
+
         const preset1Btn = document.getElementById('preset1Btn');
         if (preset1Btn) {
             preset1Btn.addEventListener('click', () => {
@@ -209,8 +201,7 @@ class ControlPanel {
                 addLog('执行预设位姿1', 'info');
             });
         }
-        
-        // Preset 2 button
+
         const preset2Btn = document.getElementById('preset2Btn');
         if (preset2Btn) {
             preset2Btn.addEventListener('click', () => {
@@ -220,6 +211,62 @@ class ControlPanel {
                 addLog('执行预设位姿2', 'info');
             });
         }
+    }
+
+    setupGripperControl() {
+        const slider = document.getElementById('gripperSlider');
+        const input = document.getElementById('gripperInput');
+        const valueDisplay = document.getElementById('gripperValue');
+        const sendBtn = document.getElementById('gripperSendBtn');
+        if (!slider) return;
+
+        const syncDisplay = () => {
+            const v = parseFloat(slider.value);
+            if (input) input.value = v.toFixed(0);
+            if (valueDisplay) valueDisplay.textContent = `${v.toFixed(1)}°`;
+        };
+
+        slider.addEventListener('input', syncDisplay);
+        slider.addEventListener('change', () => {
+            const angleRad = degToRad(parseFloat(slider.value));
+            sendCommand('set_gripper', { angle: angleRad });
+            addLog(`夹爪角度 -> ${slider.value}°`, 'info');
+        });
+
+        if (input) {
+            input.addEventListener('change', () => {
+                let v = Math.max(0, Math.min(90, parseFloat(input.value) || 0));
+                input.value = v;
+                slider.value = v;
+                syncDisplay();
+            });
+        }
+
+        if (sendBtn) {
+            sendBtn.addEventListener('click', () => {
+                const angleRad = degToRad(parseFloat(slider.value));
+                sendCommand('set_gripper', { angle: angleRad });
+                addLog(`夹爪角度 -> ${slider.value}°`, 'info');
+            });
+        }
+    }
+
+    setupCartesianControl() {
+        const btn = document.getElementById('moveToPoseBtn');
+        if (!btn) return;
+
+        btn.addEventListener('click', () => {
+            const x = parseFloat(document.getElementById('cartX')?.value || 0);
+            const y = parseFloat(document.getElementById('cartY')?.value || 0);
+            const z = parseFloat(document.getElementById('cartZ')?.value || 0);
+            const rx = degToRad(parseFloat(document.getElementById('cartRX')?.value || 0));
+            const ry = degToRad(parseFloat(document.getElementById('cartRY')?.value || 0));
+            const rz = degToRad(parseFloat(document.getElementById('cartRZ')?.value || 0));
+            const dur = parseFloat(document.getElementById('motionDuration')?.value || 2.0);
+
+            sendCommand('move_to_pose', { x, y, z, rx, ry, rz, duration: dur });
+            addLog(`EndPoseCtrl -> (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)})`, 'info');
+        });
     }
     
     setupZeroTorqueToggle() {

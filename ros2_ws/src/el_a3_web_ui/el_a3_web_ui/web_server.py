@@ -6,9 +6,7 @@ EL-A3 Web 服务器（Flask + SocketIO）。
 
 import os
 import sys
-import json
 import time
-import math
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -20,7 +18,7 @@ from flask_socketio import SocketIO, emit
 package_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, package_dir)
 
-from ros2_bridge import get_bridge, shutdown_bridge, ROS2Bridge
+from sdk_bridge import get_bridge, shutdown_bridge, SDKBridge
 
 
 def find_resource_dirs():
@@ -77,23 +75,23 @@ MAX_HISTORY_LENGTH = 200
 log_history: List[Dict] = []
 MAX_LOG_LENGTH = 100
 
-# ROS2 Bridge reference
-bridge: Optional[ROS2Bridge] = None
+# SDK Bridge reference
+bridge: Optional[SDKBridge] = None
 
 
-def init_ros2_bridge():
-    """初始化 ROS2 bridge。"""
+def init_sdk_bridge():
+    """初始化 SDK bridge。"""
     global bridge
     try:
         bridge = get_bridge()
         if bridge:
             bridge.set_state_callback(on_state_update)
             bridge.set_log_callback(on_log_message)
-            add_log('ROS2 Bridge 已初始化', 'info')
+            add_log('SDK Bridge 已初始化', 'info')
         else:
-            add_log('ROS2 Bridge 初始化失败', 'error')
+            add_log('SDK Bridge 初始化失败', 'error')
     except Exception as e:
-        add_log(f'ROS2 Bridge 异常：{e}', 'error')
+        add_log(f'SDK Bridge 异常：{e}', 'error')
 
 
 def add_log(message: str, level: str = 'info'):
@@ -209,13 +207,48 @@ def api_get_teleop_status():
 @app.route('/api/can_interfaces')
 def api_get_can_interfaces():
     """获取可用 CAN 接口列表。"""
-    from ros2_bridge import ROS2Bridge
-    interfaces = ROS2Bridge.get_available_can_interfaces()
+    interfaces = SDKBridge.get_available_can_interfaces()
     current = bridge.get_can_interface() if bridge else 'can0'
     return jsonify({
         'interfaces': interfaces,
         'current': current
     })
+
+
+@app.route('/api/end_effector')
+def api_get_end_effector():
+    """获取末端位姿。"""
+    if bridge:
+        return jsonify(bridge.get_end_effector())
+    return jsonify({'error': 'Bridge not initialized'}), 503
+
+
+@app.route('/api/sdk_info')
+def api_get_sdk_info():
+    """获取 SDK 版本、连接状态、臂状态。"""
+    if bridge:
+        return jsonify(bridge.get_sdk_info())
+    return jsonify({'error': 'Bridge not initialized'}), 503
+
+
+@app.route('/api/dynamics')
+def api_get_dynamics():
+    """获取重力矩等动力学信息。"""
+    if bridge:
+        return jsonify(bridge.get_dynamics())
+    return jsonify({'error': 'Bridge not initialized'}), 503
+
+
+# ============ Helpers ============
+
+def _run_blocking_cmd(cmd_type: str, fn, *args):
+    """Run a potentially blocking SDK call in a background thread and notify clients."""
+    try:
+        ok = fn(*args)
+        socketio.emit('command_result', {'success': ok, 'type': cmd_type})
+    except Exception as e:
+        add_log(f'{cmd_type} 异常: {e}', 'error')
+        socketio.emit('command_result', {'success': False, 'type': cmd_type})
 
 
 # ============ SocketIO Events ============
@@ -244,7 +277,7 @@ def handle_disconnect():
 def handle_command(data):
     """处理来自客户端的控制指令。"""
     if not bridge:
-        emit('error', {'message': 'ROS2 bridge 不可用'})
+        emit('error', {'message': 'SDK bridge 不可用'})
         return
     
     cmd_type = data.get('type')
@@ -266,15 +299,45 @@ def handle_command(data):
             emit('command_result', {'success': success, 'type': cmd_type})
             
         elif cmd_type == 'go_home':
-            # Go to home position
             duration = data.get('duration', 3.0)
-            success = bridge.go_home(duration)
-            emit('command_result', {'success': success, 'type': cmd_type})
-            
+            threading.Thread(
+                target=_run_blocking_cmd, args=(cmd_type, bridge.go_home, duration),
+                daemon=True).start()
+            emit('command_result', {'success': True, 'type': cmd_type, 'info': 'planning'})
+
+        elif cmd_type == 'go_zero':
+            threading.Thread(
+                target=_run_blocking_cmd, args=(cmd_type, bridge.go_zero),
+                daemon=True).start()
+            emit('command_result', {'success': True, 'type': cmd_type, 'info': 'planning'})
+
         elif cmd_type == 'emergency_stop':
-            # Emergency stop
-            bridge.emergency_stop()
-            emit('command_result', {'success': True, 'type': cmd_type})
+            success = bridge.emergency_stop()
+            emit('command_result', {'success': success, 'type': cmd_type})
+
+        elif cmd_type == 'set_gripper':
+            angle = data.get('angle', 0.0)
+            success = bridge.set_gripper(angle)
+            emit('command_result', {'success': success, 'type': cmd_type})
+
+        elif cmd_type == 'move_to_pose':
+            x = data.get('x', 0.0)
+            y = data.get('y', 0.0)
+            z = data.get('z', 0.0)
+            rx = data.get('rx', 0.0)
+            ry = data.get('ry', 0.0)
+            rz = data.get('rz', 0.0)
+            dur = data.get('duration', 2.0)
+            success = bridge.move_to_pose(x, y, z, rx, ry, rz, dur)
+            emit('command_result', {'success': success, 'type': cmd_type})
+
+        elif cmd_type == 'plan_joint_goal':
+            positions = data.get('positions', [])
+            vel_scale = data.get('velocity_scale', 0.3)
+            threading.Thread(
+                target=_run_blocking_cmd, args=(cmd_type, bridge.plan_joint_goal, positions, vel_scale),
+                daemon=True).start()
+            emit('command_result', {'success': True, 'type': cmd_type, 'info': 'planning'})
             
         elif cmd_type == 'set_zero_torque':
             # Set zero torque mode
@@ -345,7 +408,7 @@ def handle_get_state():
     if bridge:
         emit('state', bridge.get_state())
     else:
-        emit('error', {'message': 'ROS2 bridge 不可用'})
+        emit('error', {'message': 'SDK bridge 不可用'})
 
 
 # ============ Main Entry Point ============
@@ -370,8 +433,8 @@ def main():
 ╚═══════════════════════════════════════════════════════════╝
     """)
     
-    # Initialize ROS2 bridge in background
-    bridge_thread = threading.Thread(target=init_ros2_bridge, daemon=True)
+    # Initialize SDK bridge in background
+    bridge_thread = threading.Thread(target=init_sdk_bridge, daemon=True)
     bridge_thread.start()
     
     # Give bridge time to initialize

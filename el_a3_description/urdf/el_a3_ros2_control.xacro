@@ -2,7 +2,11 @@
 <!-- EL-A3 ros2_control configuration -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="el_a3_ros2_control" params="use_mock_hardware can_interface host_can_id">
+  <xacro:macro name="el_a3_ros2_control" params="use_mock_hardware can_interface host_can_id wrist_motor_type">
+
+    <!-- Wrist motor effort limits based on motor type -->
+    <xacro:property name="wrist_effort_max" value="${5.5 if wrist_motor_type == 'RS05' else 6.0}"/>
+    <xacro:property name="wrist_effort_min" value="${-5.5 if wrist_motor_type == 'RS05' else -6.0}"/>
 
     <ros2_control name="RsA3System" type="system">
       <hardware>
@@ -14,8 +18,8 @@
           <plugin>el_a3_hardware/RsA3HardwareInterface</plugin>
           <param name="can_interface">${can_interface}</param>
           <param name="host_can_id">${host_can_id}</param>
-          <param name="position_kp">80.0</param>
-          <param name="position_kd">4.0</param>
+          <param name="position_kp">55.0</param>
+          <param name="position_kd">4.5</param>
           <param name="velocity_limit">10.0</param>
           <!-- S-curve trajectory planning parameters -->
           <param name="s_curve_enabled">false</param>   <!-- Temporarily disabled to avoid conflict with MoveIt trajectory -->
@@ -25,8 +29,8 @@
           <!-- Fallback smoothing filter parameters (used when S-curve is disabled) -->
           <param name="smoothing_alpha">0.2</param>     <!-- Low-pass filter coefficient -->
           
-          <!-- Gravity compensation feedforward parameters (50% gravity as feedforward torque) -->
-          <param name="gravity_feedforward_ratio">0.5</param>  <!-- 50% gravity compensation ratio -->
+          <!-- Gravity compensation feedforward parameters (100% gravity as feedforward torque, matching zero-torque mode) -->
+          <param name="gravity_feedforward_ratio">0.85</param>  <!-- 85% gravity compensation ratio, avoid over-compensation oscillation -->
           
           <!-- Zero-torque mode parameters -->
           <param name="zero_torque_kd">0.3</param>  <!-- Zero-torque mode damping coefficient -->
@@ -149,12 +153,14 @@
         <state_interface name="effort"/>
       </joint>
 
-      <!-- Joint L4 - EL05 Motor 4 -->
+      <!-- Joint L4 - ${wrist_motor_type} Motor 4 -->
       <joint name="L4_joint">
         <param name="motor_id">4</param>
-        <param name="motor_type">EL05</param>
+        <param name="motor_type">${wrist_motor_type}</param>
         <param name="position_offset">0.0</param>
         <param name="direction">1.0</param>
+        <param name="kp">30.0</param>
+        <param name="kd">2.0</param>
         <command_interface name="position">
           <param name="min">-1.5708</param>
           <param name="max">1.5708</param>
@@ -164,20 +170,22 @@
           <param name="max">50.0</param>
         </command_interface>
         <command_interface name="effort">
-          <param name="min">-6.0</param>
-          <param name="max">6.0</param>
+          <param name="min">${wrist_effort_min}</param>
+          <param name="max">${wrist_effort_max}</param>
         </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <state_interface name="effort"/>
       </joint>
 
-      <!-- Joint L5 - EL05 Motor 5 -->
+      <!-- Joint L5 - ${wrist_motor_type} Motor 5 -->
       <joint name="L5_joint">
         <param name="motor_id">5</param>
-        <param name="motor_type">EL05</param>
+        <param name="motor_type">${wrist_motor_type}</param>
         <param name="position_offset">0.0</param>
         <param name="direction">-1.0</param>
+        <param name="kp">30.0</param>
+        <param name="kd">2.0</param>
         <command_interface name="position">
           <param name="min">-1.5708</param>
           <param name="max">1.5708</param>
@@ -187,18 +195,43 @@
           <param name="max">50.0</param>
         </command_interface>
         <command_interface name="effort">
-          <param name="min">-6.0</param>
-          <param name="max">6.0</param>
+          <param name="min">${wrist_effort_min}</param>
+          <param name="max">${wrist_effort_max}</param>
         </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <state_interface name="effort"/>
       </joint>
 
-      <!-- Joint L6 - EL05 Motor 6 -->
+      <!-- Joint L6 - ${wrist_motor_type} Motor 6 -->
       <joint name="L6_joint">
         <param name="motor_id">6</param>
-        <param name="motor_type">EL05</param>
+        <param name="motor_type">${wrist_motor_type}</param>
+        <param name="position_offset">0.0</param>
+        <param name="direction">1.0</param>
+        <param name="kp">30.0</param>
+        <param name="kd">2.0</param>
+        <command_interface name="position">
+          <param name="min">-1.5708</param>
+          <param name="max">1.5708</param>
+        </command_interface>
+        <command_interface name="velocity">
+          <param name="min">-50.0</param>
+          <param name="max">50.0</param>
+        </command_interface>
+        <command_interface name="effort">
+          <param name="min">${wrist_effort_min}</param>
+          <param name="max">${wrist_effort_max}</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <!-- Joint L7 - ${wrist_motor_type} Motor 7 (Gripper) -->
+      <joint name="L7_joint">
+        <param name="motor_id">7</param>
+        <param name="motor_type">${wrist_motor_type}</param>
         <param name="position_offset">0.0</param>
         <param name="direction">1.0</param>
         <command_interface name="position">
@@ -210,8 +243,8 @@
           <param name="max">50.0</param>
         </command_interface>
         <command_interface name="effort">
-          <param name="min">-6.0</param>
-          <param name="max">6.0</param>
+          <param name="min">${wrist_effort_min}</param>
+          <param name="max">${wrist_effort_max}</param>
         </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>

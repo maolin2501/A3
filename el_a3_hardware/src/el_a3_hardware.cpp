@@ -16,7 +16,6 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 
 namespace el_a3_hardware
 {
@@ -29,29 +28,22 @@ RsA3HardwareInterface::RsA3HardwareInterface()
   , velocity_limit_(10.0)
   , control_mode_(ControlMode::POSITION)
   , use_mock_hardware_(false)
-  , s_curve_enabled_(true)       // 默认启用 S 曲线规划
-  , zero_torque_mode_(false)
+  
   , zero_torque_kd_(1.0)
   , gravity_comp_enabled_(false)
-  , gravity_feedforward_ratio_(0.5)  // 默认 50% 重力补偿前馈
-  , use_pinocchio_gravity_(false)    // 默认使用简化重力模型
+  , gravity_feedforward_ratio_(1.0)
+  , use_pinocchio_gravity_(false)
   , pinocchio_initialized_(false)
-  , use_calibrated_inertia_(false)   // 默认不使用标定后的惯量参数
-  , spin_thread_running_(false)      // 服务回调线程运行标志初始化
+  , use_calibrated_inertia_(false)
   , limit_margin_(0.15)          // 约在 ~15° 处开始减速（≈8.6°）
   , limit_stop_margin_(0.02)     // 约在 ~1° 处硬停止（≈1.1°）
   , limit_decel_factor_(0.3)     // 减速到 30%
-  , max_jerk_(50.0)              // 默认最大加加速度 50 rad/s³（S 曲线规划）
+  
 {
 }
 
 RsA3HardwareInterface::~RsA3HardwareInterface()
 {
-  // 停止 spin 线程
-  spin_thread_running_ = false;
-  if (spin_thread_.joinable()) {
-    spin_thread_.join();
-  }
   on_shutdown(rclcpp_lifecycle::State());
 }
 
@@ -95,6 +87,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   hw_velocities_.resize(num_joints, 0.0);
   hw_efforts_.resize(num_joints, 0.0);
   hw_temperatures_.resize(num_joints, 0.0);
+  filtered_torque_feedback_.resize(num_joints, 0.0);
   hw_commands_positions_.resize(num_joints, 0.0);
   hw_commands_velocities_.resize(num_joints, 0.0);
   hw_commands_efforts_.resize(num_joints, 0.0);
@@ -110,17 +103,19 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   cmd_velocities_.resize(num_joints, 0.0);             // 计算得到的指令速度
   filtered_cmd_velocities_.resize(num_joints, 0.0);    // 一阶滤波后的指令速度
   velocity_ff_stage2_.resize(num_joints, 0.0);         // 二阶滤波中间量
+  vel_ma_buffer_.resize(num_joints, {0.0, 0.0, 0.0, 0.0});  // 4-sample MA circular buffer
+  vel_ma_idx_.resize(num_joints, 0);                         // MA buffer write index
   velocity_filter_alpha_ = 0.3;                        // 速度滤波系数
   
   // 默认参数
   smoothing_alpha_ = 0.08;      // 平滑系数（越小越平滑）
   max_velocity_ = 2.0;          // 最大速度 2 rad/s
   max_acceleration_ = 8.0;      // 最大加速度 8 rad/s²
-  max_jerk_ = 50.0;             // 最大加加速度 50 rad/s³（S 曲线规划）
+  
   control_period_ = 0.005;      // 默认 200Hz -> 5ms
   first_command_ = true;
-  gravity_feedforward_ratio_ = 0.5;  // 默认 50% 重力补偿前馈
-  s_curve_enabled_ = true;      // 默认启用 S 曲线
+  gravity_feedforward_ratio_ = 1.0;  // 默认 100% 重力补偿前馈（与零力矩模式一致）
+  
   
   // 从参数读取平滑系数
   if (info_.hardware_parameters.count("smoothing_alpha")) {
@@ -138,22 +133,8 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     max_acceleration_ = std::stod(info_.hardware_parameters.at("max_acceleration"));
   }
   
-  // 从参数读取加加速度上限（S 曲线规划）
-  if (info_.hardware_parameters.count("max_jerk")) {
-    max_jerk_ = std::stod(info_.hardware_parameters.at("max_jerk"));
-  }
   
-  // 从参数读取 S 曲线开关
-  if (info_.hardware_parameters.count("s_curve_enabled")) {
-    s_curve_enabled_ = info_.hardware_parameters.at("s_curve_enabled") == "true";
-  }
   
-  // 初始化 S 曲线生成器（每个关节一个）
-  s_curve_generators_.clear();
-  for (size_t i = 0; i < num_joints; ++i) {
-    s_curve_generators_.push_back(
-      std::make_unique<SCurveGenerator>(max_velocity_, max_acceleration_, max_jerk_));
-  }
   
   // 从参数读取重力补偿前馈比例
   if (info_.hardware_parameters.count("gravity_feedforward_ratio")) {
@@ -180,9 +161,8 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
               "已初始化：%zu 个关节，CAN 接口：%s", num_joints, can_interface_.c_str());
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "  S 曲线：%s，max_vel=%.1f rad/s，max_acc=%.1f rad/s²，max_jerk=%.1f rad/s³",
-              s_curve_enabled_ ? "启用" : "禁用",
-              max_velocity_, max_acceleration_, max_jerk_);
+              "  max_vel=%.1f rad/s，max_acc=%.1f rad/s²",
+              max_velocity_, max_acceleration_);
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
               "  PID：Kp=%.1f，Kd=%.1f，重力补偿前馈比例=%.0f%%",
               position_kp_, position_kd_, gravity_feedforward_ratio_ * 100.0);
@@ -198,9 +178,11 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   gravity_torque_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/gravity_torque", 10);
   velocity_ff_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/velocity_feedforward", 10);
   temperature_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/motor_temperature", 10);
+  torque_feedback_pub_ = debug_node_->create_publisher<sensor_msgs::msg::JointState>("/debug/torque_feedback", 10);
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "调试发布器已创建：/debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, /debug/velocity_feedforward, /debug/motor_temperature");
+              "调试发布器已创建：/debug/hw_command, /debug/smoothed_command, /debug/gravity_torque, "
+              "/debug/velocity_feedforward, /debug/motor_temperature, /debug/torque_feedback");
 
   // ============ 初始化重力补偿参数 ============
   gravity_params_.resize(num_joints);
@@ -308,27 +290,19 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
     }
   }
   
-  // 创建零力矩模式服务
-  zero_torque_srv_ = debug_node_->create_service<std_srvs::srv::SetBool>(
-    "/el_a3/set_zero_torque_mode",
-    std::bind(&RsA3HardwareInterface::zeroTorqueModeCallback, this,
-              std::placeholders::_1, std::placeholders::_2));
-  
-  // 启动独立线程处理服务回调
-  spin_thread_running_ = true;
-  spin_thread_ = std::thread([this]() {
-    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "调试节点 spin 线程已启动");
-    while (spin_thread_running_ && rclcpp::ok()) {
-      rclcpp::spin_some(debug_node_);
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 100Hz
-    }
-    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "调试节点 spin 线程已停止");
-  });
-  
+  // Dynamic parameters for runtime tuning
+  debug_node_->declare_parameter("position_kp", position_kp_);
+  debug_node_->declare_parameter("position_kd", position_kd_);
+  debug_node_->declare_parameter("gravity_feedforward_ratio", gravity_feedforward_ratio_);
+  debug_node_->declare_parameter("zero_torque_kd", zero_torque_kd_);
+  debug_node_->declare_parameter("smoothing_alpha", smoothing_alpha_);
+
+  param_callback_handle_ = debug_node_->add_on_set_parameters_callback(
+    std::bind(&RsA3HardwareInterface::onParameterChange, this, std::placeholders::_1));
+
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-              "零力矩模式服务已创建：/el_a3/set_zero_torque_mode（Kd=%.1f）", zero_torque_kd_);
+              "Zero-torque mode: use controller_manager switch_controller "
+              "(arm_controller <-> zero_torque_controller). Kd=%.1f", zero_torque_kd_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -357,6 +331,8 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
         config.motor_type = MotorType::RS00;
       } else if (type_str == "EL05") {
         config.motor_type = MotorType::EL05;
+      } else if (type_str == "RS05") {
+        config.motor_type = MotorType::RS05;
       } else {
         RCLCPP_ERROR(rclcpp::get_logger("RsA3HardwareInterface"),
                      "关节 %s 的 motor_type 未知：%s", joint.name.c_str(), type_str.c_str());
@@ -419,7 +395,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
                   "关节 %s：motor_id=%d，type=%s，dir=%.1f，限位=[%.1f°~%.1f°]，Kp=%.0f，Kd=%.1f",
                   config.name.c_str(), config.motor_id,
-                  config.motor_type == MotorType::RS00 ? "RS00" : "EL05",
+                  motorTypeName(config.motor_type),
                   config.direction,
                   config.lower_limit * 180.0 / M_PI, config.upper_limit * 180.0 / M_PI,
                   config.kp, config.kd);
@@ -427,7 +403,7 @@ bool RsA3HardwareInterface::parseJointConfig(const hardware_interface::HardwareI
       RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
                   "关节 %s：motor_id=%d，type=%s，dir=%.1f，限位=[%.1f°~%.1f°]",
                   config.name.c_str(), config.motor_id,
-                  config.motor_type == MotorType::RS00 ? "RS00" : "EL05",
+                  motorTypeName(config.motor_type),
                   config.direction,
                   config.lower_limit * 180.0 / M_PI, config.upper_limit * 180.0 / M_PI);
     }
@@ -569,11 +545,6 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_activate(
     smoothed_velocities_[i] = 0.0;
     smoothed_accelerations_[i] = 0.0;
     
-    // 初始化 S 曲线生成器状态
-    if (s_curve_enabled_ && i < s_curve_generators_.size()) {
-      s_curve_generators_[i]->initialize(initial_positions[i], 0.0, 0.0);
-    }
-    
     // 计算电机坐标系下的位置
     double motor_pos = initial_positions[i] * config.direction + config.position_offset;
     
@@ -670,7 +641,7 @@ std::vector<hardware_interface::StateInterface> RsA3HardwareInterface::export_st
 std::vector<hardware_interface::CommandInterface> RsA3HardwareInterface::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
-  
+
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
@@ -682,8 +653,60 @@ std::vector<hardware_interface::CommandInterface> RsA3HardwareInterface::export_
       hardware_interface::CommandInterface(
         joint_configs_[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_efforts_[i]));
   }
-  
+
   return command_interfaces;
+}
+
+hardware_interface::return_type RsA3HardwareInterface::prepare_command_mode_switch(
+  const std::vector<std::string>& start_interfaces,
+  const std::vector<std::string>& /*stop_interfaces*/)
+{
+  bool wants_effort = false;
+  for (const auto& iface : start_interfaces) {
+    if (iface.find("effort") != std::string::npos) {
+      wants_effort = true;
+      break;
+    }
+  }
+  if (wants_effort) {
+    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                "Mode switch prepared: effort (zero-torque)");
+  }
+  return hardware_interface::return_type::OK;
+}
+
+hardware_interface::return_type RsA3HardwareInterface::perform_command_mode_switch(
+  const std::vector<std::string>& start_interfaces,
+  const std::vector<std::string>& stop_interfaces)
+{
+  bool starting_effort = false;
+  bool stopping_effort = false;
+
+  for (const auto& iface : start_interfaces) {
+    if (iface.find("effort") != std::string::npos) {
+      starting_effort = true;
+      break;
+    }
+  }
+  for (const auto& iface : stop_interfaces) {
+    if (iface.find("effort") != std::string::npos) {
+      stopping_effort = true;
+      break;
+    }
+  }
+
+  if (starting_effort && !effort_mode_) {
+    effort_mode_ = true;
+    RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
+                "Switched to EFFORT mode (zero-torque). Kp=0, Kd=%.1f", zero_torque_kd_);
+  }
+  if (stopping_effort && effort_mode_) {
+    effort_mode_ = false;
+    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                "Switched to POSITION mode. Kp=%.0f, Kd=%.1f", position_kp_, position_kd_);
+  }
+
+  return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type RsA3HardwareInterface::read(
@@ -715,6 +738,14 @@ hardware_interface::return_type RsA3HardwareInterface::read(
     }
   }
   
+  // EMA filter on torque feedback (alpha=0.15 at 200Hz -> ~5Hz cutoff)
+  constexpr double torque_ema_alpha = 0.15;
+  for (size_t i = 0; i < joint_configs_.size(); ++i) {
+    filtered_torque_feedback_[i] =
+        torque_ema_alpha * hw_efforts_[i] +
+        (1.0 - torque_ema_alpha) * filtered_torque_feedback_[i];
+  }
+
   // 发布温度数据（降频：每 50 次 read 发布一次）
   static int temp_pub_counter = 0;
   if (++temp_pub_counter >= 50) {
@@ -762,37 +793,19 @@ hardware_interface::return_type RsA3HardwareInterface::write(
       filtered_cmd_velocities_[i] = 0.0;
       velocity_ff_stage2_[i] = 0.0;  // 2nd-order filter intermediate value
       
-      // Initialize S-curve generators
-      if (s_curve_enabled_ && i < s_curve_generators_.size()) {
-        s_curve_generators_[i]->initialize(hw_commands_positions_[i], 0.0, 0.0);
-      }
     }
     first_command_ = false;
     RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "收到首条指令，正在初始化位置（S 曲线：%s）",
-                s_curve_enabled_ ? "启用" : "禁用");
+                "收到首条指令，正在初始化位置");
   }
   
-  // ============ [Global joint limit protection] DISABLED ============
   bool global_stop = false;
   
-  // ============ Detect if command has been updated (solve velocity jump caused by IK frame skip) ============
-  bool command_updated = false;
-  for (size_t i = 0; i < joint_configs_.size(); ++i) {
-    if (std::abs(hw_commands_positions_[i] - last_hw_commands_positions_[i]) > 1e-8) {
-      command_updated = true;
-      break;
-    }
-  }
-  // Update records
-  for (size_t i = 0; i < joint_configs_.size(); ++i) {
-    last_hw_commands_positions_[i] = hw_commands_positions_[i];
-  }
-  
   // ============ Pre-compute Pinocchio gravity compensation vector (if enabled) ============
+  // Use command positions (not feedback) to avoid feedback noise coupling into torque
   std::vector<double> pinocchio_gravity_torques;
   if (use_pinocchio_gravity_ && pinocchio_initialized_) {
-    pinocchio_gravity_torques = computePinocchioGravity(hw_positions_);
+    pinocchio_gravity_torques = computePinocchioGravity(hw_commands_positions_);
   }
   
   // Send commands using motion control mode
@@ -802,21 +815,18 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     // ============ Position command processing ============
     double new_position = hw_commands_positions_[i];
     
-    // [Fix] Compute velocity first (before updating position!)
-    double raw_cmd_velocity = (new_position - smoothed_positions_[i]) / dt;
+    // Use controller-provided spline-interpolated velocity (from JointTrajectoryController)
+    double controller_velocity = hw_commands_velocities_[i];
     
-    // Update state (for read() feedback and debug)
-    double new_velocity = raw_cmd_velocity;
-    double new_acceleration = (new_velocity - smoothed_velocities_[i]) / dt;
+    // Update state (for read() feedback and state interfaces)
+    smoothed_accelerations_[i] = (controller_velocity - smoothed_velocities_[i]) / dt;
     smoothed_positions_[i] = new_position;
-    smoothed_velocities_[i] = new_velocity;
-    smoothed_accelerations_[i] = new_acceleration;
+    smoothed_velocities_[i] = controller_velocity;
     
-    // [Joint limit protection] DISABLED
-    double limit_factor = 1.0;
-    (void)limit_factor;
-    (void)global_stop;
-    
+    if (applyJointLimitProtection(i, smoothed_positions_[i])) {
+      global_stop = true;
+    }
+
     // Convert joint coordinates to motor coordinates
     double cmd_position = smoothed_positions_[i] * config.direction + config.position_offset;
     
@@ -824,43 +834,34 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     auto params = getMotorParams(config.motor_type);
     cmd_position = std::clamp(cmd_position, params.p_min, params.p_max);
     
-    // ============ Compute velocity feedforward (based on whether command updated) ============
+    // ============ Compute velocity feedforward (MA pre-filter + 2nd-order EMA) ============
     double filtered_velocity;
     
-    if (command_updated) {
-      // Command updated, compute velocity feedforward normally
-      // Position difference deadzone: tiny velocity produces no output
-      const double velocity_threshold = 0.001;  // 0.001 rad/s
-      double cmd_velocity;
-      if (std::abs(raw_cmd_velocity) < velocity_threshold) {
-        cmd_velocity = 0.0;
-      } else {
-        cmd_velocity = raw_cmd_velocity;
-      }
-      
-      // Clamp velocity to valid range
-      cmd_velocity = std::clamp(cmd_velocity, -velocity_limit_, velocity_limit_);
-      
-      // 2nd-order filter
-      double alpha1 = 0.1;  // 1st-order filter
+    {
+      // 4-sample moving average pre-filter (null at 50Hz = teleop segment rate)
+      vel_ma_buffer_[i][vel_ma_idx_[i]] = controller_velocity;
+      vel_ma_idx_[i] = (vel_ma_idx_[i] + 1) % 4;
+      double ma_velocity = 0.0;
+      for (int k = 0; k < 4; ++k) ma_velocity += vel_ma_buffer_[i][k];
+      ma_velocity *= 0.25;
+
+      double cmd_velocity = std::clamp(ma_velocity, -velocity_limit_, velocity_limit_);
+
+      // 2nd-order EMA filter
+      double alpha1 = 0.18;
       double first_stage = alpha1 * cmd_velocity + (1.0 - alpha1) * filtered_cmd_velocities_[i];
       filtered_cmd_velocities_[i] = first_stage;
-      
-      double alpha2 = 0.15;  // 2nd-order filter
+
+      double alpha2 = 0.18;
       filtered_velocity = alpha2 * first_stage + (1.0 - alpha2) * velocity_ff_stage2_[i];
-      
+
       // Acceleration limiting
       double max_velocity_change = max_acceleration_ * dt;
       double velocity_change = filtered_velocity - velocity_ff_stage2_[i];
       if (std::abs(velocity_change) > max_velocity_change) {
-        filtered_velocity = velocity_ff_stage2_[i] + 
+        filtered_velocity = velocity_ff_stage2_[i] +
                             max_velocity_change * (velocity_change > 0 ? 1.0 : -1.0);
       }
-    } else {
-      // Command not updated (IK frame skip), smooth velocity decay instead of recomputation
-      filtered_velocity = velocity_ff_stage2_[i] * 0.95;  // Decay by 5%
-      // Also update 1st-order filter state for consistency
-      filtered_cmd_velocities_[i] *= 0.95;
     }
     
     // Velocity deadzone: very small velocity zeroed out
@@ -868,6 +869,10 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     if (std::abs(filtered_velocity) < velocity_deadzone) {
       filtered_velocity = 0.0;
     }
+    
+    // Output hard clamp: prevent dangerous velocity feedforward during large trajectories
+    const double max_velocity_ff = 0.3;
+    filtered_velocity = std::clamp(filtered_velocity, -max_velocity_ff, max_velocity_ff);
     
     velocity_ff_stage2_[i] = filtered_velocity;
     
@@ -877,8 +882,8 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     // Debug: periodic log output
     if (write_counter % 1000 == 0 && i == 0) {
       RCLCPP_DEBUG(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "[速度前馈] 原始=%.3f，滤波后=%.3f",
-                  raw_cmd_velocity, filtered_velocity);
+                  "[速度前馈] 控制器速度=%.3f，滤波后=%.3f",
+                  controller_velocity, filtered_velocity);
     }
     
     // ============ Compute gravity compensation torque (as feedforward by ratio) ============
@@ -888,41 +893,31 @@ hardware_interface::return_type RsA3HardwareInterface::write(
         // Use Pinocchio full dynamics computation (considering all joint cascading effects)
         gravity_torque = pinocchio_gravity_torques[i] * gravity_feedforward_ratio_;
       } else {
-        // Use simplified model (per-joint independent)
-        gravity_torque = computeGravityTorque(i, hw_positions_[i]) * gravity_feedforward_ratio_;
+        // Use simplified model (per-joint independent), based on command position
+        gravity_torque = computeGravityTorque(i, hw_commands_positions_[i]) * gravity_feedforward_ratio_;
       }
     }
     
-    // ============ Select control parameters based on mode ============
+    // ============ Select control parameters based on active mode ============
     double motor_kp, motor_kd, cmd_torque;
     double final_cmd_position;
-    
-    if (zero_torque_mode_) {
-      // Zero-torque mode: Kp=0, Kd=damping, only gravity compensation (100% for zero-torque mode)
+
+    if (effort_mode_) {
+      // Effort mode (zero-torque): Kp=0, Kd=damping, torque from effort command interface
       motor_kp = 0.0;
       motor_kd = std::clamp(zero_torque_kd_, 0.0, 5.0);
-      
-      // Zero-torque mode uses 100% gravity compensation
-      if (use_pinocchio_gravity_ && pinocchio_initialized_ && i < pinocchio_gravity_torques.size()) {
-        cmd_torque = pinocchio_gravity_torques[i];  // Pinocchio full dynamics
-      } else {
-        cmd_torque = computeGravityTorque(i, hw_positions_[i]);  // Simplified model
-      }
-      
-      // Send current actual position (no position error)
+      cmd_torque = hw_commands_efforts_[i];
       final_cmd_position = hw_positions_[i] * config.direction + config.position_offset;
     } else {
-      // Normal position control mode - use per-joint Kp/Kd (if configured), otherwise use global values
       double joint_kp = (config.kp > 0.0) ? config.kp : position_kp_;
       double joint_kd = (config.kd > 0.0) ? config.kd : position_kd_;
       motor_kp = std::clamp(joint_kp, 0.0, 500.0);
       motor_kd = std::clamp(joint_kd, 0.0, 5.0);
-      cmd_torque = gravity_torque;  // Gravity compensation feedforward at gravity_feedforward_ratio_ ratio
+      cmd_torque = gravity_torque;
       final_cmd_position = cmd_position;
     }
-    
-    // Compute final velocity feedforward to send (send 0 velocity in zero-torque mode)
-    double final_cmd_velocity = zero_torque_mode_ ? 0.0 : motor_cmd_velocity;
+
+    double final_cmd_velocity = effort_mode_ ? 0.0 : motor_cmd_velocity;
     
     if (!can_driver_->sendMotionControl(
           config.motor_id,
@@ -945,7 +940,10 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     usleep(50);
   }
 
-  // Note: Service callbacks now handled in separate spin_thread_, no need to call spin_some here
+  // Debug node spin for parameter updates
+  if (debug_node_) {
+    rclcpp::spin_some(debug_node_);
+  }
 
   // Publish debug info (every 10 cycles, ~20Hz)
   if (write_counter % 10 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
@@ -960,24 +958,28 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     hw_cmd_msg.position = hw_commands_positions_;
     hw_cmd_pub_->publish(hw_cmd_msg);
     
-    // Publish smoothed command positions (actually sent to motors)
+    // Publish smoothed command (actually sent to motors): position + filtered velocity feedforward
     sensor_msgs::msg::JointState smoothed_msg;
     smoothed_msg.header.stamp = now;
     smoothed_msg.name = hw_cmd_msg.name;
     smoothed_msg.position = smoothed_positions_;
-    smoothed_msg.velocity = smoothed_velocities_;
+    smoothed_msg.velocity = velocity_ff_stage2_;
     smoothed_cmd_pub_->publish(smoothed_msg);
     
-    // Publish gravity compensation torques
-    if (gravity_comp_enabled_ && gravity_torque_pub_) {
-      sensor_msgs::msg::JointState gravity_msg;
-      gravity_msg.header.stamp = now;
-      gravity_msg.name = hw_cmd_msg.name;
-      for (size_t i = 0; i < joint_configs_.size(); ++i) {
-        gravity_msg.effort.push_back(computeGravityTorque(i, hw_positions_[i]));
-      }
-      gravity_torque_pub_->publish(gravity_msg);
+  }
+  
+  // Gravity torque published at full control frequency (200Hz)
+  if (gravity_comp_enabled_ && gravity_torque_pub_ && debug_node_) {
+    auto now_g = debug_node_->get_clock()->now();
+    sensor_msgs::msg::JointState gravity_msg;
+    gravity_msg.header.stamp = now_g;
+    for (const auto& config : joint_configs_) {
+      gravity_msg.name.push_back(config.name);
     }
+    for (size_t i = 0; i < joint_configs_.size(); ++i) {
+      gravity_msg.effort.push_back(computeGravityTorque(i, hw_positions_[i]));
+    }
+    gravity_torque_pub_->publish(gravity_msg);
   }
   
   // [Improved] Velocity feedforward published at high frequency (every frame at 200Hz, for high-frequency analysis)
@@ -990,6 +992,18 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     }
     velocity_ff_msg.velocity = velocity_ff_stage2_;  // Using 2nd-order filtered velocity
     velocity_ff_pub_->publish(velocity_ff_msg);
+  }
+
+  // Filtered torque feedback (every 5 cycles, ~40Hz)
+  if (write_counter % 5 == 0 && torque_feedback_pub_ && debug_node_) {
+    auto now = debug_node_->get_clock()->now();
+    sensor_msgs::msg::JointState torque_msg;
+    torque_msg.header.stamp = now;
+    for (const auto& config : joint_configs_) {
+      torque_msg.name.push_back(config.name);
+    }
+    torque_msg.effort = filtered_torque_feedback_;
+    torque_feedback_pub_->publish(torque_msg);
   }
 
   write_counter++;
@@ -1008,25 +1022,8 @@ double RsA3HardwareInterface::computeGravityTorque(size_t joint_idx, double posi
        + params.offset;
 }
 
-void RsA3HardwareInterface::zeroTorqueModeCallback(
-  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-  std::shared_ptr<std_srvs::srv::SetBool::Response> response)
-{
-  zero_torque_mode_ = request->data;
-  
-  if (zero_torque_mode_) {
-    RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
-                "零力矩模式已启用！Kp=0，Kd=%.1f，重力补偿=%s",
-                zero_torque_kd_, gravity_comp_enabled_ ? "开启" : "关闭");
-    response->message = "零力矩模式已启用：机械臂可手动拖动";
-  } else {
-    RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
-                "零力矩模式已关闭：恢复位置控制");
-    response->message = "零力矩模式已关闭：位置控制生效";
-  }
-  
-  response->success = true;
-}
+// Zero-torque mode is now handled via controller_manager switch_controller
+// (arm_controller <-> zero_torque_controller). No service needed.
 
 double RsA3HardwareInterface::computeLimitProtectionFactor(
   size_t joint_idx, double current_pos, double target_pos)
@@ -1374,6 +1371,54 @@ void RsA3HardwareInterface::applyCalibratedInertiaToModel()
   
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
               "Pinocchio 模型已更新（已应用标定惯量参数）");
+}
+
+rcl_interfaces::msg::SetParametersResult RsA3HardwareInterface::onParameterChange(
+  const std::vector<rclcpp::Parameter>& parameters)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  
+  for (const auto& param : parameters) {
+    const auto& name = param.get_name();
+    
+    if (name == "position_kp" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      double val = std::clamp(param.as_double(), 0.0, 500.0);
+      position_kp_ = val;
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                  "动态参数更新 position_kp = %.1f", val);
+    }
+    else if (name == "position_kd" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      double val = std::clamp(param.as_double(), 0.0, 10.0);
+      position_kd_ = val;
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                  "动态参数更新 position_kd = %.2f", val);
+    }
+    else if (name == "gravity_feedforward_ratio" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      double val = std::clamp(param.as_double(), 0.0, 1.0);
+      gravity_feedforward_ratio_ = val;
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                  "动态参数更新 gravity_feedforward_ratio = %.2f", val);
+    }
+    else if (name == "zero_torque_kd" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      double val = std::clamp(param.as_double(), 0.0, 10.0);
+      zero_torque_kd_ = val;
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                  "动态参数更新 zero_torque_kd = %.2f", val);
+    }
+    else if (name == "smoothing_alpha" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      double val = std::clamp(param.as_double(), 0.01, 1.0);
+      smoothing_alpha_ = val;
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+                  "动态参数更新 smoothing_alpha = %.3f", val);
+    }
+    else {
+      result.successful = false;
+      result.reason = "Unknown parameter: " + name;
+    }
+  }
+  
+  return result;
 }
 
 }  // namespace el_a3_hardware

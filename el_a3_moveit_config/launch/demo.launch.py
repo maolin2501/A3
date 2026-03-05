@@ -6,10 +6,12 @@ Launches MoveIt motion planning interface (simulation mode)
 
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, TimerAction
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import yaml
@@ -50,7 +52,7 @@ def generate_launch_description():
             " use_mock_hardware:=true",
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # SRDF
     robot_description_semantic_content = Command(
@@ -61,7 +63,9 @@ def generate_launch_description():
             ),
         ]
     )
-    robot_description_semantic = {"robot_description_semantic": robot_description_semantic_content}
+    robot_description_semantic = {
+        "robot_description_semantic": ParameterValue(robot_description_semantic_content, value_type=str)
+    }
 
     # Kinematics
     kinematics_yaml = load_yaml("el_a3_moveit_config", "config/kinematics.yaml")
@@ -135,17 +139,26 @@ def generate_launch_description():
         output="both",
     )
 
-    # Spawner nodes
+    # Spawner nodes (with timeout to wait for controller_manager)
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "-c", "/controller_manager"],
+        arguments=["joint_state_broadcaster", "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30"],
     )
 
     arm_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["arm_controller", "-c", "/controller_manager"],
+        arguments=["arm_controller", "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30"],
+    )
+
+    gripper_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["gripper_controller", "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30"],
     )
 
     rviz_node = Node(
@@ -163,11 +176,19 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    delay_spawners = TimerAction(
+        period=3.0,
+        actions=[
+            joint_state_broadcaster_spawner,
+            arm_controller_spawner,
+            gripper_controller_spawner,
+        ],
+    )
+
     nodes = [
         robot_state_publisher_node,
         ros2_control_node,
-        joint_state_broadcaster_spawner,
-        arm_controller_spawner,
+        delay_spawners,
         move_group_node,
         rviz_node,
     ]

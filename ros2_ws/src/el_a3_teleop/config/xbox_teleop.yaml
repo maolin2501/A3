@@ -17,13 +17,13 @@ xbox_teleop_node:
     
     # ============ Joint output smoothing parameters ============
     # Smooth IK-solved joint positions to prevent joint jumps
-    joint_smoothing_alpha: 0.15    # Joint smoothing factor (0-1), smaller = smoother but slower response
+    joint_smoothing_alpha: 0.25    # Joint smoothing factor (0-1), smaller = smoother but slower response
     max_joint_velocity: 1.5        # Max single joint velocity limit rad/s (prevents excessive joint speed)
     max_joint_acceleration: 5.0    # Max single joint acceleration limit rad/s² (prevents acceleration spikes)
     
     # ============ Input smoothing parameters ============
     # Smooth joystick input filtering (optional, independent from joint smoothing)
-    input_smoothing_factor: 0.3    # Input smoothing factor (0-1), smaller = smoother
+    input_smoothing_factor: 0.7    # Input smoothing factor (0-1), larger = more responsive
     
     # ============ Singularity protection parameters ============
     # Detect and reject IK solution jumps to prevent violent motion near singularities
@@ -61,3 +61,6 @@ xbox_teleop_node:
     slave_trajectory_topic: "/arm2/arm2_arm_controller/joint_trajectory"
     slave_joint_prefix: "arm2_"
     go_zero_duration: 3.0
+    # EMA smoothing on master arm input (1.0=no smoothing, 0.5~0.8=smoothed)
+    # Only useful if P0+P1 still show jitter; otherwise keep at 1.0
+    master_slave_smoothing_alpha: 1.0

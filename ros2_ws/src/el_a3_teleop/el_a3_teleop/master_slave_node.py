@@ -15,13 +15,15 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.action import FollowJointTrajectory
-from std_srvs.srv import SetBool
+from controller_manager_msgs.srv import SwitchController
 from builtin_interfaces.msg import Duration
 
 import yaml
 import numpy as np
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
+
+from el_a3_sdk.arm_manager import ArmManager
 
 
 @dataclass
@@ -272,6 +274,22 @@ class MasterSlaveNode(Node):
                 )
                 self.mappings.append(mapping)
         
+        # ArmManager for multi-arm management
+        self._arm_mgr = ArmManager.get_instance()
+        for mapping in self.mappings:
+            for ns in [mapping.config.master] + mapping.config.slaves:
+                if not self._arm_mgr.has_arm(ns):
+                    try:
+                        arm = self._arm_mgr.register_ros_arm(
+                            name=ns,
+                            namespace=ns,
+                            controller_name=f"{ns}_arm_controller",
+                        )
+                        arm.ConnectPort()
+                        self.get_logger().info(f'ArmManager: {ns} 已注册')
+                    except Exception as e:
+                        self.get_logger().warn(f'ArmManager: {ns} 注册失败: {e}')
+
         # Enable master arm zero-torque mode
         if self.master_config.get('use_zero_torque_mode', True):
             self.enable_master_zero_torque()
@@ -322,29 +340,24 @@ class MasterSlaveNode(Node):
         return config
     
     def enable_master_zero_torque(self):
-        """启用主臂零力矩模式（支持纯零力矩模式）"""
-        use_pure_zero_torque = self.master_config.get('pure_zero_torque', True)
-        
+        """启用主臂零力矩模式（通过 controller_manager switch_controller）"""
         for mapping in self.mappings:
             master_ns = mapping.config.master
-            
-            # Select service based on configuration
-            if use_pure_zero_torque:
-                # Pure zero-torque mode: Kp=0, Kd=0, torque=0 (for master-slave teleoperation)
-                service_name = f'/{master_ns}/set_pure_zero_torque_mode'
-                mode_name = 'pure zero-torque'
-            else:
-                # Zero-torque mode with gravity compensation
-                service_name = f'/{master_ns}/set_zero_torque_mode'
-                mode_name = 'gravity-compensated zero-torque'
-            
-            client = self.create_client(SetBool, service_name)
-            
+            service_name = f'/{master_ns}/controller_manager/switch_controller'
+
+            client = self.create_client(SwitchController, service_name)
+
             if client.wait_for_service(timeout_sec=2.0):
-                request = SetBool.Request()
-                request.data = True
+                request = SwitchController.Request()
+                request.activate_controllers = ['zero_torque_controller']
+                request.deactivate_controllers = [
+                    f'{master_ns}_arm_controller',
+                    f'{master_ns}_gripper_controller',
+                ]
+                request.strictness = SwitchController.Request.BEST_EFFORT
                 future = client.call_async(request)
-                self.get_logger().info(f'已请求启用 {master_ns} 的 {mode_name} 模式')
+                self.get_logger().info(
+                    f'已请求启用 {master_ns} 的 zero_torque_controller')
             else:
                 self.get_logger().warn(f'服务不可用：{service_name}')
     
@@ -352,6 +365,26 @@ class MasterSlaveNode(Node):
         """主控制循环"""
         for mapping in self.mappings:
             mapping.update()
+
+    # ============ SDK 便捷方法（通过 ArmManager） ============
+
+    def sdk_move_j(self, ns: str, positions: list, duration: float = 3.0) -> bool:
+        """使用 SDK MoveJ 执行指定臂的关节运动"""
+        if self._arm_mgr.has_arm(ns):
+            return self._arm_mgr[ns].MoveJ(positions, duration=duration)
+        return False
+
+    def sdk_zero_torque(self, ns: str, enable: bool) -> bool:
+        """使用 SDK 设置指定臂零力矩模式"""
+        if self._arm_mgr.has_arm(ns):
+            return self._arm_mgr[ns].ZeroTorqueModeWithGravity(enable)
+        return False
+
+    def sdk_compute_gravity(self, ns: str) -> Optional[list]:
+        """使用 SDK 获取指定臂重力补偿力矩"""
+        if self._arm_mgr.has_arm(ns):
+            return self._arm_mgr[ns].ComputeGravityTorques()
+        return None
 
 
 def main(args=None):

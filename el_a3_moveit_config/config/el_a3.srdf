@@ -5,8 +5,14 @@ EL-A3 Robot Arm SRDF (Semantic Robot Description Format)
 -->
 <robot name="EL-A3">
     <!-- Planning Groups -->
+    <!-- Arm group: 6-DOF (L1-L6), chain ends at end_effector (fixed to l5_l6_urdf_asm) -->
     <group name="arm">
         <chain base_link="base_link" tip_link="end_effector"/>
+    </group>
+
+    <!-- Gripper group: 1-DOF (L7), separate kinematic branch from l5_l6_urdf_asm -->
+    <group name="gripper">
+        <joint name="L7_joint"/>
     </group>
 
     <!-- Group states (predefined poses) -->
@@ -37,8 +43,16 @@ EL-A3 Robot Arm SRDF (Semantic Robot Description Format)
         <joint name="L6_joint" value="0"/>
     </group_state>
 
+    <group_state name="open" group="gripper">
+        <joint name="L7_joint" value="1.5708"/>
+    </group_state>
+
+    <group_state name="close" group="gripper">
+        <joint name="L7_joint" value="0"/>
+    </group_state>
+
     <!-- End Effector -->
-    <end_effector name="ee" parent_link="end_effector" group="arm"/>
+    <end_effector name="ee" parent_link="end_effector" group="gripper" parent_group="arm"/>
 
     <!-- Virtual Joint to World -->
     <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>
@@ -51,7 +65,9 @@ EL-A3 Robot Arm SRDF (Semantic Robot Description Format)
     <disable_collisions link1="l4_l5_urdf_asm" link2="part_9" reason="Adjacent"/>
     <disable_collisions link1="part_9" link2="l5_l6_urdf_asm" reason="Adjacent"/>
     <disable_collisions link1="l5_l6_urdf_asm" link2="end_effector" reason="Adjacent"/>
-    
+    <disable_collisions link1="l5_l6_urdf_asm" link2="gripper_link" reason="Adjacent"/>
+    <disable_collisions link1="gripper_link" link2="end_effector" reason="Never"/>
+
     <!-- Additional collision pairs that never collide -->
     <disable_collisions link1="l1_urdf_urdf_asm" link2="l2_l3_urdf_asm" reason="Never"/>
     <disable_collisions link1="l1_link_urdf_asm" link2="l3_lnik_urdf_asm" reason="Never"/>
@@ -60,8 +76,7 @@ EL-A3 Robot Arm SRDF (Semantic Robot Description Format)
     <disable_collisions link1="l4_l5_urdf_asm" link2="l5_l6_urdf_asm" reason="Never"/>
     <disable_collisions link1="part_9" link2="end_effector" reason="Never"/>
     <disable_collisions link1="base_link" link2="l1_urdf_urdf_asm" reason="Adjacent"/>
-    
-    <!-- 禁用大臂与第5轴连接件之间的碰撞检测（零位附近机械结构接近） -->
+
     <disable_collisions link1="l2_l3_urdf_asm" link2="part_9" reason="Never"/>
     <disable_collisions link1="l2_l3_urdf_asm" link2="l5_l6_urdf_asm" reason="Never"/>
 

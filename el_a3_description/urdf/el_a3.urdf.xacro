@@ -7,6 +7,11 @@
   <xacro:arg name="use_mock_hardware" default="false"/>
   <xacro:arg name="can_interface" default="can0"/>
   <xacro:arg name="host_can_id" default="253"/>
+  <xacro:arg name="wrist_motor_type" default="EL05"/>
+
+  <!-- Wrist motor parameters (EL05: 6Nm, RS05: 5.5Nm) -->
+  <xacro:property name="wrist_motor_type" value="$(arg wrist_motor_type)"/>
+  <xacro:property name="wrist_effort" value="${5.5 if wrist_motor_type == 'RS05' else 6.0}"/>
   
   <!-- Include ros2_control -->
   <xacro:include filename="$(find el_a3_description)/urdf/el_a3_ros2_control.xacro"/>
@@ -598,47 +603,66 @@
     <dynamics damping="0.1" friction="0.1"/>
   </joint>
 
-  <!-- Joint L4 (EL05 Motor 4) -->
+  <!-- Joint L4 (${wrist_motor_type} Motor 4) -->
   <joint name="L4_joint" type="revolute">
     <origin xyz="-0.185 0.064 -0.0518" rpy="0 0 0"/>
     <parent link="l3_lnik_urdf_asm"/>
     <child link="l4_l5_urdf_asm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="6.0" velocity="50" lower="-1.5708" upper="1.5708"/>
+    <limit effort="${wrist_effort}" velocity="50" lower="-1.5708" upper="1.5708"/>
     <dynamics damping="0.05" friction="0.05"/>
   </joint>
 
-  <!-- Joint L5 (EL05 Motor 5) -->
+  <!-- Joint L5 (${wrist_motor_type} Motor 5) -->
   <joint name="L5_joint" type="revolute">
     <origin xyz="-0.0492 0.038 0" rpy="1.5708 0 0"/>
     <parent link="l4_l5_urdf_asm"/>
     <child link="part_9"/>
     <axis xyz="0 0 1"/>
-    <limit effort="6.0" velocity="50" lower="-1.5708" upper="1.5708"/>
+    <limit effort="${wrist_effort}" velocity="50" lower="-1.5708" upper="1.5708"/>
     <dynamics damping="0.05" friction="0.05"/>
   </joint>
 
-  <!-- Joint L6 (EL05 Motor 6) -->
+  <!-- Joint L6 (${wrist_motor_type} Motor 6) -->
   <joint name="L6_joint" type="revolute">
     <origin xyz="0.00805 0 0.038" rpy="-1.5708 0 -1.5708"/>
     <parent link="part_9"/>
     <child link="l5_l6_urdf_asm"/>
     <axis xyz="0 0 1"/>
-    <limit effort="6.0" velocity="50" lower="-1.5708" upper="1.5708"/>
+    <limit effort="${wrist_effort}" velocity="50" lower="-1.5708" upper="1.5708"/>
     <dynamics damping="0.05" friction="0.05"/>
   </joint>
 
-  <!-- End Effector joint -->
+  <!-- End Effector joint (fixed to last arm link, defines TCP for MoveIt planning) -->
   <joint name="end_effector_joint" type="fixed">
     <origin xyz="0 0 -0.074" rpy="0 0 0"/>
     <parent link="l5_l6_urdf_asm"/>
     <child link="end_effector"/>
   </joint>
 
+  <!-- Joint L7 (${wrist_motor_type} Motor 7 - Gripper, separate kinematic branch) -->
+  <joint name="L7_joint" type="revolute">
+    <origin xyz="0 0 -0.074" rpy="0 0 0"/>
+    <parent link="l5_l6_urdf_asm"/>
+    <child link="gripper_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="${wrist_effort}" velocity="50" lower="-1.5708" upper="1.5708"/>
+    <dynamics damping="0.05" friction="0.05"/>
+  </joint>
+
+  <link name="gripper_link">
+    <inertial>
+      <mass value="0.05"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
   <!-- ros2_control interface -->
   <xacro:el_a3_ros2_control 
     use_mock_hardware="$(arg use_mock_hardware)"
     can_interface="$(arg can_interface)"
-    host_can_id="$(arg host_can_id)"/>
+    host_can_id="$(arg host_can_id)"
+    wrist_motor_type="$(arg wrist_motor_type)"/>
 
 </robot>

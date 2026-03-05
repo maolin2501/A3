@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=wy
 Environment="ROS_DOMAIN_ID=0"
+Environment="FASTRTPS_DEFAULT_PROFILES_FILE=/home/wy/RS/A3/ros2_ws/fastrtps_no_shm.xml"
 ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765'
 Restart=on-failure
 RestartSec=5

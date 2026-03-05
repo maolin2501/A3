@@ -6,6 +6,7 @@
 #ifndef EL_A3_HARDWARE__EL_A3_HARDWARE_HPP_
 #define EL_A3_HARDWARE__EL_A3_HARDWARE_HPP_
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -18,12 +19,11 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 
 #include "el_a3_hardware/robstride_can_driver.hpp"
-#include "el_a3_hardware/s_curve_generator.hpp"
 
 // Pinocchio：用于动力学计算
 #include <pinocchio/parsers/urdf.hpp>
@@ -86,6 +86,14 @@ public:
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
 
+  hardware_interface::return_type prepare_command_mode_switch(
+    const std::vector<std::string>& start_interfaces,
+    const std::vector<std::string>& stop_interfaces) override;
+
+  hardware_interface::return_type perform_command_mode_switch(
+    const std::vector<std::string>& start_interfaces,
+    const std::vector<std::string>& stop_interfaces) override;
+
   hardware_interface::return_type read(
     const rclcpp::Time& time, const rclcpp::Duration& period) override;
   
@@ -133,6 +141,8 @@ private:
   std::vector<double> cmd_velocities_;              // 计算得到的指令速度
   std::vector<double> filtered_cmd_velocities_;     // 一阶滤波后的指令速度
   std::vector<double> velocity_ff_stage2_;          // 二阶滤波中间量（最终发送的速度前馈）
+  std::vector<std::array<double, 4>> vel_ma_buffer_; // 4-sample moving average circular buffer per joint
+  std::vector<int> vel_ma_idx_;                       // circular buffer write index per joint
   double velocity_filter_alpha_;                    // 速度滤波系数 (0-1)
   double smoothing_alpha_;                          // 平滑系数 (0-1，越小越平滑)
   double max_velocity_;                             // 最大速度限制 (rad/s)
@@ -151,14 +161,9 @@ private:
   
   bool use_mock_hardware_;  // 是否使用仿真/假硬件
   
-  // S 曲线轨迹生成器（每个关节一个）
-  std::vector<std::unique_ptr<SCurveGenerator>> s_curve_generators_;
-  bool s_curve_enabled_;                      // 是否启用 S 曲线规划
-  
-  // ============ 零力矩模式与重力补偿 ============
-  // 零力矩模式
-  bool zero_torque_mode_;           // 是否启用零力矩模式
-  double zero_torque_kd_;           // 零力矩模式阻尼系数
+  // ============ 控制模式（由 controller_manager mode switch 驱动） ============
+  std::atomic<bool> effort_mode_{false};  // true = effort (zero-torque), false = position
+  double zero_torque_kd_;                 // 零力矩模式阻尼系数（仍可通过参数配置）
   
   // 重力补偿参数（按关节：τ = sin_coeff * sin(θ) + cos_coeff * cos(θ) + offset）
   struct GravityCompParams {
@@ -226,29 +231,26 @@ private:
   // 计算关节重力补偿力矩（简化模型：各关节相互独立）
   double computeGravityTorque(size_t joint_idx, double position);
   
-  // 零力矩模式服务回调
-  void zeroTorqueModeCallback(
-    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-    std::shared_ptr<std_srvs::srv::SetBool::Response> response);
-  
-  // 零力矩模式服务
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr zero_torque_srv_;
-  
-  // 调试发布器
+  // 调试发布器（轻量级，在 read/write 中直接发布）
   rclcpp::Node::SharedPtr debug_node_;
-  std::thread spin_thread_;                 // 处理服务回调的线程
-  std::atomic<bool> spin_thread_running_;   // 线程运行标志
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr hw_cmd_pub_;        // 控制器输出的指令
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr smoothed_cmd_pub_;  // 实际发送给电机的平滑指令
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gravity_torque_pub_; // 重力补偿力矩
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr velocity_ff_pub_;   // 速度前馈（发送给电机）
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr temperature_pub_;   // 电机温度
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr hw_cmd_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr smoothed_cmd_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gravity_torque_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr velocity_ff_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr temperature_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr torque_feedback_pub_;
+  std::vector<double> filtered_torque_feedback_;  // EMA-filtered torque from motors
+
+  // 动态参数回调
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+  rcl_interfaces::msg::SetParametersResult onParameterChange(
+    const std::vector<rclcpp::Parameter>& parameters);
   
   // ============ 关节限位保护 ============
   double limit_margin_;              // 开始减速的余量 (rad)
   double limit_stop_margin_;         // 硬停止余量 (rad)
   double limit_decel_factor_;        // 接近限位时的减速系数 (0-1)
-  double max_jerk_;                  // 最大加加速度限制 (rad/s³) - S 曲线规划
+  
   std::vector<bool> joint_at_limit_; // 每个关节是否处于限位区
   std::vector<int> limit_warn_counter_;  // 限位告警计数（避免刷屏）
   

@@ -171,14 +171,11 @@ class Dashboard {
     
     updateDashboard(state) {
         if (!state || !state.joints) return;
-        
-        // Update joint state table
+
         this.updateStateTable(state.joints);
-        
-        // Update history data
+        this.updateEndEffector(state.end_effector);
+        this.updateSDKStatus(state);
         this.updateHistoryData(state);
-        
-        // Update charts
         this.updateCharts();
     }
     
@@ -227,6 +224,29 @@ class Dashboard {
         });
     }
     
+    updateEndEffector(ee) {
+        if (!ee) return;
+        const fmt = (v) => v !== undefined ? formatNumber(v, 4) : '--';
+        const fmtDeg = (v) => v !== undefined ? formatNumber(radToDeg(v), 1) : '--';
+
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        set('eeX', fmt(ee.x));
+        set('eeY', fmt(ee.y));
+        set('eeZ', fmt(ee.z));
+        set('eeRX', fmtDeg(ee.rx));
+        set('eeRY', fmtDeg(ee.ry));
+        set('eeRZ', fmtDeg(ee.rz));
+    }
+
+    updateSDKStatus(state) {
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        set('sdkVersion', state.sdk_version || '--');
+        set('sdkArmState', state.arm_state || '--');
+
+        const gripAngle = state.gripper_angle !== undefined ? formatNumber(radToDeg(state.gripper_angle), 1) + '°' : '--';
+        set('sdkGripperAngle', gripAngle);
+    }
+
     updateHistoryData(state) {
         // Add timestamp
         const now = new Date();

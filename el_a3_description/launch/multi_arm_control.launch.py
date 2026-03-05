@@ -58,6 +58,9 @@ def generate_arm_nodes(context, *args, **kwargs):
         default_inertia_path = '/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml'
         inertia_config_path = arm_cfg.get('inertia_config_path', default_inertia_path)
         
+        # Wrist motor type (EL05 or RS05)
+        wrist_motor_type = arm_cfg.get('wrist_motor_type', 'EL05')
+        
         # Generate URDF with prefix
         robot_description_content = Command([
             PathJoinSubstitution([FindExecutable(name="xacro")]),
@@ -70,6 +73,7 @@ def generate_arm_nodes(context, *args, **kwargs):
             f" can_interface:={can_interface}",
             f" host_can_id:={host_can_id}",
             f" inertia_config_path:={inertia_config_path}",
+            f" wrist_motor_type:={wrist_motor_type}",
         ])
         
         robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
@@ -121,6 +125,17 @@ def generate_arm_nodes(context, *args, **kwargs):
                     "--controller-manager-timeout", "60"
                 ],
             ),
+
+            # Gripper Controller Spawner
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=[
+                    f"{prefix}gripper_controller",
+                    "--controller-manager", f"/{arm_name}/controller_manager",
+                    "--controller-manager-timeout", "60"
+                ],
+            ),
         ])
         
         nodes.append(arm_group)
@@ -144,18 +159,18 @@ def generate_arm_nodes(context, *args, **kwargs):
 
 
 def generate_controller_params(prefix: str, arm_name: str, update_rate: int) -> str:
-    """Generate controller parameter config file (7 joints including gripper L7)
+    """Generate controller parameter config file (arm L1-L6 + gripper L7)
     
     Returns temporary YAML file path
     """
     
-    joints = [f"L{i}_joint" for i in range(1, 7)]  # L1-L6 (no prefix, matches URDF; L7 gripper not in URDF)
+    arm_joints = [f"L{i}_joint" for i in range(1, 7)]   # L1-L6
+    gripper_joints = ["L7_joint"]
     
-    # Controller names (with prefix)
     jsb_name = f"{prefix}joint_state_broadcaster"
-    ctrl_name = f"{prefix}arm_controller"
+    arm_ctrl_name = f"{prefix}arm_controller"
+    grip_ctrl_name = f"{prefix}gripper_controller"
     
-    # Parameter structure using full namespace path
     params = {
         f"/{arm_name}/controller_manager": {
             "ros__parameters": {
@@ -163,14 +178,17 @@ def generate_controller_params(prefix: str, arm_name: str, update_rate: int) -> 
                 jsb_name: {
                     "type": "joint_state_broadcaster/JointStateBroadcaster"
                 },
-                ctrl_name: {
+                arm_ctrl_name: {
                     "type": "joint_trajectory_controller/JointTrajectoryController"
-                }
+                },
+                grip_ctrl_name: {
+                    "type": "joint_trajectory_controller/JointTrajectoryController"
+                },
             }
         },
-        f"/{arm_name}/{ctrl_name}": {
+        f"/{arm_name}/{arm_ctrl_name}": {
             "ros__parameters": {
-                "joints": joints,
+                "joints": arm_joints,
                 "command_interfaces": ["position"],
                 "state_interfaces": ["position", "velocity"],
                 "open_loop_control": True,
@@ -181,10 +199,27 @@ def generate_controller_params(prefix: str, arm_name: str, update_rate: int) -> 
                 "constraints": {
                     "stopped_velocity_tolerance": 0.1,
                     "goal_time": 0.0,
-                    **{joint: {"goal": 0.03} for joint in joints}
+                    **{joint: {"goal": 0.03} for joint in arm_joints}
                 }
             }
-        }
+        },
+        f"/{arm_name}/{grip_ctrl_name}": {
+            "ros__parameters": {
+                "joints": gripper_joints,
+                "command_interfaces": ["position"],
+                "state_interfaces": ["position", "velocity"],
+                "open_loop_control": True,
+                "allow_nonzero_velocity_at_trajectory_end": True,
+                "interpolation_method": "splines",
+                "state_publish_rate": 50.0,
+                "action_monitor_rate": 20.0,
+                "constraints": {
+                    "stopped_velocity_tolerance": 0.2,
+                    "goal_time": 0.0,
+                    "L7_joint": {"goal": 0.05}
+                }
+            }
+        },
     }
     
     # Save as temporary YAML file

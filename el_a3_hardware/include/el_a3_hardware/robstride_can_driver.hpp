@@ -29,7 +29,8 @@ namespace el_a3_hardware
 enum class MotorType
 {
   RS00,  // 1-3号关节: 力矩±14Nm, 速度±33rad/s
-  EL05   // 4-6号关节: 力矩±6Nm, 速度±50rad/s
+  EL05,  // 4-7号关节(配置A): 力矩±6Nm, 速度±50rad/s
+  RS05   // 4-7号关节(配置B): 力矩±5.5Nm, 速度±50rad/s
 };
 
 /**
@@ -105,8 +106,27 @@ inline MotorParams getMotorParams(MotorType type)
       params.t_min = -6.0;
       params.t_max = 6.0;
       break;
+    case MotorType::RS05:
+      params.v_min = -50.0;
+      params.v_max = 50.0;
+      params.t_min = -5.5;
+      params.t_max = 5.5;
+      break;
   }
   return params;
+}
+
+/**
+ * @brief 获取电机型号名称字符串
+ */
+inline const char* motorTypeName(MotorType type)
+{
+  switch (type) {
+    case MotorType::RS00: return "RS00";
+    case MotorType::EL05: return "EL05";
+    case MotorType::RS05: return "RS05";
+    default: return "UNKNOWN";
+  }
 }
 
 /**

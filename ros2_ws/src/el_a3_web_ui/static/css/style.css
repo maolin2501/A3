@@ -771,6 +771,73 @@ body {
     background: #3a424c;
 }
 
+/* ============ Gripper Slider ============ */
+.gripper-control {
+    background: var(--bg-tertiary);
+    padding: 12px;
+    border-radius: var(--border-radius);
+}
+
+.gripper-range::-webkit-slider-thumb {
+    background: var(--accent-green) !important;
+}
+
+.gripper-range::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 8px var(--accent-green) !important;
+}
+
+/* ============ Cartesian Control ============ */
+.cartesian-control {
+    background: var(--bg-tertiary);
+    padding: 12px;
+    border-radius: var(--border-radius);
+}
+
+.cartesian-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+}
+
+.cartesian-grid .param-row {
+    padding: 6px 0;
+    border-bottom: none;
+}
+
+.cartesian-grid .joint-input {
+    width: 90px;
+}
+
+/* ============ SDK Status Card ============ */
+.sdk-status-card {
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    padding: 12px;
+}
+
+.sdk-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sdk-status-row:last-child {
+    border-bottom: none;
+}
+
+.sdk-label {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.sdk-value {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+}
+
 /* ============ Responsive ============ */
 @media (max-width: 1024px) {
     .main-content {
