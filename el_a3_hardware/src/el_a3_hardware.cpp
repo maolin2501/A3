@@ -11,6 +11,7 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <time.h>
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -781,12 +782,16 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     dt = control_period_;  // Use default period
   }
 
+  auto write_t_start = std::chrono::steady_clock::now();
+
   // [Smoothing filter] Set directly on first command, avoid smoothing from 0
   if (first_command_) {
+    gravity_input_positions_.resize(joint_configs_.size(), 0.0);
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
       smoothed_positions_[i] = hw_commands_positions_[i];
       smoothed_velocities_[i] = 0.0;
       smoothed_accelerations_[i] = 0.0;
+      gravity_input_positions_[i] = hw_commands_positions_[i];
       
       // Initialize velocity feedforward variables, avoid jump on first computation
       last_cmd_positions_[i] = hw_commands_positions_[i];
@@ -802,10 +807,15 @@ hardware_interface::return_type RsA3HardwareInterface::write(
   bool global_stop = false;
   
   // ============ Pre-compute Pinocchio gravity compensation vector (if enabled) ============
-  // Use command positions (not feedback) to avoid feedback noise coupling into torque
+  // Smooth positions for gravity computation (alpha=0.1 → ~3.4Hz cutoff at 200Hz)
+  constexpr double gravity_smooth_alpha = 0.1;
+  for (size_t i = 0; i < joint_configs_.size(); ++i) {
+    gravity_input_positions_[i] = gravity_smooth_alpha * hw_commands_positions_[i]
+                                + (1.0 - gravity_smooth_alpha) * gravity_input_positions_[i];
+  }
   std::vector<double> pinocchio_gravity_torques;
   if (use_pinocchio_gravity_ && pinocchio_initialized_) {
-    pinocchio_gravity_torques = computePinocchioGravity(hw_commands_positions_);
+    pinocchio_gravity_torques = computePinocchioGravity(gravity_input_positions_);
   }
   
   // Send commands using motion control mode
@@ -818,9 +828,11 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     // Use controller-provided spline-interpolated velocity (from JointTrajectoryController)
     double controller_velocity = hw_commands_velocities_[i];
     
-    // Update state (for read() feedback and state interfaces)
+    // EMA position smoothing (smoothing_alpha_: 0=hold, 1=direct passthrough)
+    smoothed_positions_[i] = smoothing_alpha_ * new_position
+                           + (1.0 - smoothing_alpha_) * smoothed_positions_[i];
+
     smoothed_accelerations_[i] = (controller_velocity - smoothed_velocities_[i]) / dt;
-    smoothed_positions_[i] = new_position;
     smoothed_velocities_[i] = controller_velocity;
     
     if (applyJointLimitProtection(i, smoothed_positions_[i])) {
@@ -864,15 +876,17 @@ hardware_interface::return_type RsA3HardwareInterface::write(
       }
     }
     
-    // Velocity deadzone: very small velocity zeroed out
-    const double velocity_deadzone = 0.005;  // 0.005 rad/s
-    if (std::abs(filtered_velocity) < velocity_deadzone) {
-      filtered_velocity = 0.0;
-    }
-    
-    // Output hard clamp: prevent dangerous velocity feedforward during large trajectories
+    // Smooth deadzone: cubic fade from 0 to 1 over [0, deadzone_width]
+    const double dz_width = 0.01;
+    double abs_v = std::abs(filtered_velocity);
+    double fade = (abs_v < dz_width)
+        ? abs_v * abs_v * (3.0 - 2.0 * abs_v / dz_width) / (dz_width * dz_width)
+        : 1.0;
+    filtered_velocity *= fade;
+
+    // Soft clamp via tanh instead of hard clamp (smooth near ±max)
     const double max_velocity_ff = 0.3;
-    filtered_velocity = std::clamp(filtered_velocity, -max_velocity_ff, max_velocity_ff);
+    filtered_velocity = max_velocity_ff * std::tanh(filtered_velocity / max_velocity_ff);
     
     velocity_ff_stage2_[i] = filtered_velocity;
     
@@ -936,20 +950,51 @@ hardware_interface::return_type RsA3HardwareInterface::write(
       }
     }
     
-    // Add inter-frame micro-delay, prevent CAN buffer congestion (6 frames × 50μs = 300μs, much less than 5ms control period)
-    usleep(50);
+    // Precise inter-frame delay via clock_nanosleep (much more accurate than usleep)
+    static const struct timespec frame_delay = {0, 50000};  // 50us
+    clock_nanosleep(CLOCK_MONOTONIC, 0, &frame_delay, nullptr);
   }
 
-  // Debug node spin for parameter updates
-  if (debug_node_) {
+  // === write() timing monitor ===
+  {
+    auto write_t_end = std::chrono::steady_clock::now();
+    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        write_t_end - write_t_start).count();
+    write_timing_sum_us_ += elapsed_us;
+    write_timing_count_++;
+    if (elapsed_us > write_timing_max_us_) {
+      write_timing_max_us_ = elapsed_us;
+    }
+    if (elapsed_us > 4000) {
+      RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
+        "write() 耗时 %ld us 超出预算 (4ms), max=%ld us, avg=%ld us",
+        elapsed_us, write_timing_max_us_,
+        write_timing_count_ > 0 ? write_timing_sum_us_ / write_timing_count_ : 0);
+    }
+    // Periodic timing report every 10s (~2000 cycles at 200Hz)
+    if (write_counter % 2000 == 0 && write_timing_count_ > 0) {
+      RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+        "[时序] write() avg=%ld us, max=%ld us, cycles=%ld, CAN retries=%lu, fails=%lu",
+        write_timing_sum_us_ / write_timing_count_, write_timing_max_us_,
+        write_timing_count_,
+        can_driver_ ? can_driver_->getSendRetryCount() : 0UL,
+        can_driver_ ? can_driver_->getSendFailCount() : 0UL);
+      write_timing_max_us_ = 0;
+      write_timing_sum_us_ = 0;
+      write_timing_count_ = 0;
+    }
+  }
+
+  // === Debug publishing moved to low-frequency path to keep CAN send timing clean ===
+  // spin_some deferred to every 50 cycles (~4Hz) instead of every cycle
+  if (write_counter % 50 == 0 && debug_node_) {
     rclcpp::spin_some(debug_node_);
   }
 
-  // Publish debug info (every 10 cycles, ~20Hz)
-  if (write_counter % 10 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
+  // Debug info at ~4Hz (every 50 cycles) — reduced from 20Hz to minimize write() jitter
+  if (write_counter % 50 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
     auto now = debug_node_->get_clock()->now();
     
-    // Publish controller command positions
     sensor_msgs::msg::JointState hw_cmd_msg;
     hw_cmd_msg.header.stamp = now;
     for (const auto& config : joint_configs_) {
@@ -958,18 +1003,16 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     hw_cmd_msg.position = hw_commands_positions_;
     hw_cmd_pub_->publish(hw_cmd_msg);
     
-    // Publish smoothed command (actually sent to motors): position + filtered velocity feedforward
     sensor_msgs::msg::JointState smoothed_msg;
     smoothed_msg.header.stamp = now;
     smoothed_msg.name = hw_cmd_msg.name;
     smoothed_msg.position = smoothed_positions_;
     smoothed_msg.velocity = velocity_ff_stage2_;
     smoothed_cmd_pub_->publish(smoothed_msg);
-    
   }
   
-  // Gravity torque published at full control frequency (200Hz)
-  if (gravity_comp_enabled_ && gravity_torque_pub_ && debug_node_) {
+  // Gravity torque at ~10Hz (every 20 cycles) — reduced from 200Hz
+  if (write_counter % 20 == 0 && gravity_comp_enabled_ && gravity_torque_pub_ && debug_node_) {
     auto now_g = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState gravity_msg;
     gravity_msg.header.stamp = now_g;
@@ -982,20 +1025,20 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     gravity_torque_pub_->publish(gravity_msg);
   }
   
-  // [Improved] Velocity feedforward published at high frequency (every frame at 200Hz, for high-frequency analysis)
-  if (velocity_ff_pub_ && debug_node_) {
+  // Velocity feedforward at ~20Hz (every 10 cycles) — reduced from 200Hz
+  if (write_counter % 10 == 0 && velocity_ff_pub_ && debug_node_) {
     auto now = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState velocity_ff_msg;
     velocity_ff_msg.header.stamp = now;
     for (const auto& config : joint_configs_) {
       velocity_ff_msg.name.push_back(config.name);
     }
-    velocity_ff_msg.velocity = velocity_ff_stage2_;  // Using 2nd-order filtered velocity
+    velocity_ff_msg.velocity = velocity_ff_stage2_;
     velocity_ff_pub_->publish(velocity_ff_msg);
   }
 
-  // Filtered torque feedback (every 5 cycles, ~40Hz)
-  if (write_counter % 5 == 0 && torque_feedback_pub_ && debug_node_) {
+  // Filtered torque feedback at ~10Hz (every 20 cycles) — reduced from 40Hz
+  if (write_counter % 20 == 0 && torque_feedback_pub_ && debug_node_) {
     auto now = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState torque_msg;
     torque_msg.header.stamp = now;

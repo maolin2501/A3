@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <chrono>
+#include <time.h>
 
 namespace el_a3_hardware
 {
@@ -84,8 +85,18 @@ bool RobstrideCanDriver::init()
   tv.tv_sec = 0;
   tv.tv_usec = 100000;  // 100ms
   setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  // Enlarge send buffer to reduce ENOBUFS under burst (6 frames/cycle @ 200Hz)
+  int sndbuf = 64 * 1024;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+  // Only receive Type 2 feedback frames (comm_type=2 in bit28~24 of 29-bit extended ID)
+  struct can_filter rfilter;
+  rfilter.can_id  = (2u << 24) | CAN_EFF_FLAG;
+  rfilter.can_mask = (0x1Fu << 24) | CAN_EFF_FLAG;
+  setsockopt(socket_fd_, SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter));
   
-  std::cout << "[RobstrideCanDriver] 已在 " << can_interface_ << " 上初始化" << std::endl;
+  std::cout << "[RobstrideCanDriver] 已在 " << can_interface_ << " 上初始化 (sndbuf=" << sndbuf << ")" << std::endl;
   return true;
 }
 
@@ -115,28 +126,30 @@ bool RobstrideCanDriver::sendFrame(const can_frame& frame)
 {
   std::lock_guard<std::mutex> lock(send_mutex_);
   
-  // 添加重试机制处理缓冲区满的情况
-  const int max_retries = 10;
-  const int retry_delay_us = 1000;  // 1ms
+  constexpr int max_retries = 3;
+  constexpr int retry_delay_us = 100;
   
-  for (int retry = 0; retry < max_retries; ++retry) {
-  ssize_t nbytes = ::write(socket_fd_, &frame, sizeof(frame));
+  for (int retry = 0; retry <= max_retries; ++retry) {
+    ssize_t nbytes = ::write(socket_fd_, &frame, sizeof(frame));
     if (nbytes == sizeof(frame)) {
       return true;
     }
     
-    // 如果是缓冲区满，等待后重试
     if (errno == ENOBUFS || errno == EAGAIN || errno == EWOULDBLOCK) {
-      usleep(retry_delay_us * (retry + 1));  // 递增延迟
+      send_retry_count_.fetch_add(1, std::memory_order_relaxed);
+      if (retry < max_retries) {
+        struct timespec ts = {0, retry_delay_us * 1000};
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, nullptr);
+      }
       continue;
     }
     
-    // 其他错误直接返回失败
-    std::cerr << "[RobstrideCanDriver] 发送 CAN 帧失败: " << strerror(errno) << std::endl;
+    std::cerr << "[RobstrideCanDriver] CAN send failed: " << strerror(errno) << std::endl;
+    send_fail_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   
-  std::cerr << "[RobstrideCanDriver] 重试 " << max_retries << " 次后仍发送 CAN 帧失败: " << strerror(errno) << std::endl;
+  send_fail_count_.fetch_add(1, std::memory_order_relaxed);
   return false;
 }
 
@@ -161,7 +174,8 @@ uint16_t RobstrideCanDriver::floatToUint16(double x, double x_min, double x_max)
   if (x < x_min) x = x_min;
   
   double span = x_max - x_min;
-  return static_cast<uint16_t>((x - x_min) * 65535.0 / span);
+  uint16_t raw = static_cast<uint16_t>((x - x_min) * 65535.0 / span + 0.5);
+  return (raw > 65535) ? 65535 : raw;
 }
 
 double RobstrideCanDriver::uint16ToFloat(uint16_t x_int, double x_min, double x_max)

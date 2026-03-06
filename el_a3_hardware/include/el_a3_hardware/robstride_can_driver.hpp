@@ -312,6 +312,14 @@ private:
   // 电机反馈缓存（按 motor_id 索引）
   std::vector<MotorFeedback> motor_feedbacks_;
   std::vector<MotorType> motor_types_;
+
+  // 发送统计（用于时序诊断）
+  std::atomic<uint64_t> send_retry_count_{0};
+  std::atomic<uint64_t> send_fail_count_{0};
+
+public:
+  uint64_t getSendRetryCount() const { return send_retry_count_.load(std::memory_order_relaxed); }
+  uint64_t getSendFailCount() const { return send_fail_count_.load(std::memory_order_relaxed); }
 };
 
 }  // namespace el_a3_hardware

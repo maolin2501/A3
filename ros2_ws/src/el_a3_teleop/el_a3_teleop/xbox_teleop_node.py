@@ -276,6 +276,7 @@ class XboxTeleopNode(Node):
         self._latest_ik_raw = None      # IK callback writes latest raw solution here
         self._latest_ik_consumed = True  # True once the 50Hz timer has consumed the result
         self._ik_smooth_target = None   # Last accepted raw IK target to continuously smooth toward
+        self._last_ik_raw_for_seed = None  # Raw IK solution used as seed for next request (avoids smoothing drift)
         
         # MoveGroup and ExecuteTrajectory now handled by SDK (self._master_sdk)
         
@@ -566,6 +567,7 @@ class XboxTeleopNode(Node):
         self.last_ik_joint_positions = list(target_positions)
         self.smoothed_joint_positions = list(target_positions)
         self._ik_smooth_target = list(target_positions)
+        self._last_ik_raw_for_seed = list(target_positions)
         self.last_joint_velocities = [0.0] * 6
         self._latest_ik_raw = None
         self._latest_ik_consumed = True
@@ -1234,7 +1236,7 @@ class XboxTeleopNode(Node):
             self.get_logger().warn('SDK 未连接，跳过 IK 请求', throttle_duration_sec=5.0)
             return
         
-        seed = self.last_ik_joint_positions
+        seed = self._last_ik_raw_for_seed or self.last_ik_joint_positions
         if seed is None and self.current_joint_state:
             seed = []
             for name in self.joint_names:
@@ -1286,9 +1288,10 @@ class XboxTeleopNode(Node):
 
             self.publish_ik_raw_debug(ik_positions)
 
-            # Singularity / jump protection (compare against last accepted IK)
-            if self.last_ik_joint_positions is not None:
-                max_diff = max(abs(ik_positions[i] - self.last_ik_joint_positions[i])
+            # Singularity / jump protection (compare against last raw IK, not smoothed output)
+            ik_ref = self._last_ik_raw_for_seed or self.last_ik_joint_positions
+            if ik_ref is not None:
+                max_diff = max(abs(ik_positions[i] - ik_ref[i])
                                for i in range(len(ik_positions)))
 
                 if max_diff < 0.0001:
@@ -1321,6 +1324,7 @@ class XboxTeleopNode(Node):
                         self.ik_seed_just_initialized = False
 
             # Store accepted IK result for the 50Hz timer to consume
+            self._last_ik_raw_for_seed = list(ik_positions)
             self._latest_ik_raw = list(ik_positions)
             self._latest_ik_consumed = False
 

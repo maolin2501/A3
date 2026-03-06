@@ -9,7 +9,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -58,12 +58,21 @@ def generate_launch_description():
         )
     )
 
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "use_rt_sched",
+            default_value="false",
+            description="Launch ros2_control_node with SCHED_FIFO priority 50 (requires rt permissions)",
+        )
+    )
+
     # Get arguments
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     can_interface = LaunchConfiguration("can_interface")
     host_can_id = LaunchConfiguration("host_can_id")
     wrist_motor_type = LaunchConfiguration("wrist_motor_type")
     use_rviz = LaunchConfiguration("use_rviz")
+    use_rt_sched = LaunchConfiguration("use_rt_sched")
 
     # Get URDF via xacro
     robot_description_content = Command(
@@ -95,10 +104,16 @@ def generate_launch_description():
         [FindPackageShare("el_a3_description"), "config", "el_a3_view.rviz"]
     )
 
+    # RT scheduling prefix: chrt -f 50 gives SCHED_FIFO at priority 50
+    rt_prefix = PythonExpression([
+        "'chrt -f 50 ' if '", use_rt_sched, "' == 'true' else ''"
+    ])
+
     # Nodes
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
+        prefix=rt_prefix,
         parameters=[robot_description, robot_controllers],
         output="both",
         remappings=[

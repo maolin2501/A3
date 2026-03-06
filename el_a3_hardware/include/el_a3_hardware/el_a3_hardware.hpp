@@ -246,6 +246,14 @@ private:
   rcl_interfaces::msg::SetParametersResult onParameterChange(
     const std::vector<rclcpp::Parameter>& parameters);
   
+  // EMA-smoothed positions for Pinocchio gravity input
+  std::vector<double> gravity_input_positions_;
+
+  // ============ write() 时序监控 ============
+  int64_t write_timing_max_us_{0};
+  int64_t write_timing_sum_us_{0};
+  int64_t write_timing_count_{0};
+
   // ============ 关节限位保护 ============
   double limit_margin_;              // 开始减速的余量 (rad)
   double limit_stop_margin_;         // 硬停止余量 (rad)
