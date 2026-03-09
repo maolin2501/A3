@@ -623,7 +623,7 @@
       <param name="max_jerk">50.0</param>
       <!-- 最大加加速度限制 rad/s³ -->
       <!-- 后备平滑滤波参数（S曲线禁用时使用） -->
-      <param name="smoothing_alpha">0.2</param>
+      <param name="smoothing_alpha">0.8</param>
       <!-- 低通滤波系数 -->
       <!-- 重力补偿前馈参数 (50%重力作为前馈力矩) -->
       <param name="gravity_feedforward_ratio">0.5</param>

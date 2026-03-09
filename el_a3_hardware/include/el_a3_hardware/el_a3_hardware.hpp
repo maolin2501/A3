@@ -231,7 +231,7 @@ private:
   // 计算关节重力补偿力矩（简化模型：各关节相互独立）
   double computeGravityTorque(size_t joint_idx, double position);
   
-  // 调试发布器（轻量级，在 read/write 中直接发布）
+  // 调试发布器（在独立线程的定时器中发布，不阻塞 write() 热路径）
   rclcpp::Node::SharedPtr debug_node_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr hw_cmd_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr smoothed_cmd_pub_;
@@ -240,6 +240,16 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr temperature_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr torque_feedback_pub_;
   std::vector<double> filtered_torque_feedback_;  // EMA-filtered torque from motors
+
+  // Debug spin thread (keeps debug_node_ timers and parameter callbacks alive)
+  std::thread debug_spin_thread_;
+  std::atomic<bool> debug_thread_running_{false};
+  rclcpp::TimerBase::SharedPtr debug_timer_4hz_;
+  rclcpp::TimerBase::SharedPtr debug_timer_10hz_;
+  rclcpp::TimerBase::SharedPtr debug_timer_20hz_;
+  void debugPublish4Hz();
+  void debugPublish10Hz();
+  void debugPublish20Hz();
 
   // 动态参数回调
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;

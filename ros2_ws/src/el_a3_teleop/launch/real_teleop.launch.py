@@ -26,6 +26,12 @@ def generate_launch_description():
         description='Host CAN ID (0xFD = 253)'
     )
     
+    wrist_motor_type_arg = DeclareLaunchArgument(
+        'wrist_motor_type',
+        default_value='EL05',
+        description='Wrist motor type: EL05 or RS05'
+    )
+    
     device_arg = DeclareLaunchArgument(
         'device',
         default_value='/dev/input/js0',
@@ -44,6 +50,7 @@ def generate_launch_description():
         launch_arguments={
             'can_interface': LaunchConfiguration('can_interface'),
             'host_can_id': LaunchConfiguration('host_can_id'),
+            'wrist_motor_type': LaunchConfiguration('wrist_motor_type'),
         }.items()
     )
     
@@ -55,7 +62,8 @@ def generate_launch_description():
         parameters=[{
             'device_id': 0,
             'deadzone': 0.05,
-            'autorepeat_rate': 20.0,
+            'autorepeat_rate': 100.0,
+            'coalesce_interval_ms': 1,
         }],
         output='screen'
     )
@@ -78,6 +86,7 @@ def generate_launch_description():
     return LaunchDescription([
         can_interface_arg,
         host_can_id_arg,
+        wrist_motor_type_arg,
         device_arg,
         moveit_launch,
         joy_node,

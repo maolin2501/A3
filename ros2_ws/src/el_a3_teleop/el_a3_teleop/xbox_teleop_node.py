@@ -24,10 +24,12 @@ import math
 import numpy as np
 import copy
 import threading
+import time
 
 from scipy.spatial.transform import Rotation as R
 
 from el_a3_sdk.arm_manager import ArmManager
+from el_a3_sdk.data_types import ArmEndPose
 
 def quaternion_from_euler(roll, pitch, yaw):
     """将欧拉角转换为四元数 (x, y, z, w)"""
@@ -47,13 +49,13 @@ class XboxTeleopNode(Node):
         super().__init__('xbox_teleop_node')
         
         # Declare parameters
-        self.declare_parameter('update_rate', 50.0)  # Hz - 50Hz for better smoothness
+        self.declare_parameter('update_rate', 100.0)  # Hz - Jacobian IK supports 100Hz+
         self.declare_parameter('planning_group', 'arm')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('end_effector_frame', 'end_effector')
         self.declare_parameter('deadzone', 0.15)  # Joystick deadzone
         self.declare_parameter('debug_input', False)  # Debug mode
-        self.declare_parameter('use_fast_ik_mode', True)  # Use fast IK mode for 50Hz control
+        self.declare_parameter('use_fast_ik_mode', True)  # Use fast IK mode for 100Hz control
         
         # Cartesian velocity parameters (actual physical units)
         self.declare_parameter('max_linear_velocity', 0.15)   # m/s max linear velocity
@@ -65,7 +67,7 @@ class XboxTeleopNode(Node):
         self.declare_parameter('max_joint_acceleration', 5.0)  # rad/s² max single joint acceleration
         
         # Input smoothing parameters
-        self.declare_parameter('input_smoothing_factor', 0.7)  # Input smoothing coefficient
+        self.declare_parameter('input_smoothing_factor', 0.3)  # Input smoothing coefficient
         
         # Singularity protection parameters
         self.declare_parameter('max_ik_jump_threshold', 0.5)   # rad max allowed single joint jump
@@ -134,8 +136,9 @@ class XboxTeleopNode(Node):
         self.go_zero_duration = self.get_parameter('go_zero_duration').value
         self.ms_smoothing_alpha = self.get_parameter('master_slave_smoothing_alpha').value
         
-        # Calculate time step
+        # Nominal time step (used as fallback; overridden by measured dt each callback)
         self.dt = 1.0 / self.update_rate
+        self._last_update_time = None
         
         # Debug counter - avoid log spam
         self.debug_counter = 0
@@ -274,8 +277,9 @@ class XboxTeleopNode(Node):
         self._ik_resend_needed = False  # True when a newer target arrived while IK was in flight
         self.last_ik_joint_positions = None  # Cache of last IK joint positions
         self._latest_ik_raw = None      # IK callback writes latest raw solution here
-        self._latest_ik_consumed = True  # True once the 50Hz timer has consumed the result
-        self._ik_smooth_target = None   # Last accepted raw IK target to continuously smooth toward
+        self._latest_ik_consumed = True  # True once the timer has consumed the result
+        self._ik_smooth_target = None   # 2nd-order filter state: position
+        self._ik_smooth_vel = None      # 2nd-order filter state: velocity
         self._last_ik_raw_for_seed = None  # Raw IK solution used as seed for next request (avoids smoothing drift)
         
         # MoveGroup and ExecuteTrajectory now handled by SDK (self._master_sdk)
@@ -308,6 +312,15 @@ class XboxTeleopNode(Node):
             self.get_logger().warn(f'主臂 SDK 初始化失败：{e}')
             self._master_sdk = None
 
+        self._local_kin = None
+        if self._master_sdk:
+            try:
+                self._local_kin = self._master_sdk._get_kinematics()
+                if self._local_kin:
+                    self.get_logger().info('Pinocchio 本地 IK 已就绪（将绕过 MoveIt 服务）')
+            except Exception as e:
+                self.get_logger().warn(f'Pinocchio 初始化失败，将回退到 MoveIt IK：{e}')
+
         if self.master_slave_enabled:
             try:
                 self._slave_sdk = self._arm_mgr.register_ros_arm(
@@ -323,16 +336,21 @@ class XboxTeleopNode(Node):
                 self._slave_sdk = None
 
         # Wait for MoveIt services via SDK (with timeout, non-blocking if unavailable)
+        # With local Pinocchio IK, MoveIt service is only needed for go_home/go_zero trajectory planning
         self._moveit_available = False
         _svc_timeout = 5.0  # seconds
         if self._master_sdk:
             if self.use_fast_ik_mode:
-                self.get_logger().info('等待 IK 服务（快速模式，超时 %.0fs）...' % _svc_timeout)
-                if self._master_sdk._ik_client and self._master_sdk._ik_client.wait_for_service(timeout_sec=_svc_timeout):
-                    self.get_logger().info('IK 服务已连接：使用 50Hz 快速 IK 控制模式')
+                if self._local_kin:
+                    self.get_logger().info('Jacobian 微分 IK 就绪（100Hz，跳过 MoveIt IK 服务等待）')
                     self._moveit_available = True
                 else:
-                    self.get_logger().warn('IK 服务不可用，笛卡尔控制将被禁用，关节控制仍可使用')
+                    self.get_logger().info('等待 MoveIt IK 服务（回退模式，超时 %.0fs）...' % _svc_timeout)
+                    if self._master_sdk._ik_client and self._master_sdk._ik_client.wait_for_service(timeout_sec=_svc_timeout):
+                        self.get_logger().info('MoveIt IK 服务已连接（回退路径）')
+                        self._moveit_available = True
+                    else:
+                        self.get_logger().warn('IK 服务不可用，笛卡尔控制将被禁用')
             else:
                 self.get_logger().info('等待笛卡尔路径服务（超时 %.0fs）...' % _svc_timeout)
                 if self._master_sdk._cartesian_path_client and self._master_sdk._cartesian_path_client.wait_for_service(timeout_sec=_svc_timeout):
@@ -368,8 +386,11 @@ class XboxTeleopNode(Node):
         self.get_logger().info('正在规划运动到零位...')
         self.startup_go_zero()
         
-        # Create timer for periodic target pose update
-        self.timer = self.create_timer(1.0 / self.update_rate, self.update_callback)
+        # Dedicated high-precision control thread (bypasses rclpy executor jitter)
+        self._control_running = True
+        self._control_thread = threading.Thread(
+            target=self._control_loop, daemon=True, name='ctrl_100hz')
+        self._control_thread.start()
         
         self.get_logger().info('Xbox 手柄控制节点已启动')
         self.get_logger().info(f'规划组：{self.planning_group}')
@@ -379,7 +400,8 @@ class XboxTeleopNode(Node):
         self.get_logger().info(f'最大角速度：{self.max_angular_velocity} rad/s')
         self.get_logger().info(f'关节平滑：alpha={self.joint_smoothing_alpha}，max_vel={self.max_joint_velocity} rad/s')
         if self.use_fast_ik_mode:
-            self.get_logger().info('控制模式：快速 IK 模式（50Hz 笛卡尔控制）')
+            mode = 'Jacobian 微分 IK' if self._local_kin else 'MoveIt 异步'
+            self.get_logger().info(f'控制模式：{mode}（{self.update_rate:.0f}Hz 笛卡尔控制）')
         else:
             self.get_logger().info('控制模式：传统路径规划模式')
 
@@ -567,6 +589,7 @@ class XboxTeleopNode(Node):
         self.last_ik_joint_positions = list(target_positions)
         self.smoothed_joint_positions = list(target_positions)
         self._ik_smooth_target = list(target_positions)
+        self._ik_smooth_vel = [0.0] * 6
         self._last_ik_raw_for_seed = list(target_positions)
         self.last_joint_velocities = [0.0] * 6
         self._latest_ik_raw = None
@@ -722,6 +745,7 @@ class XboxTeleopNode(Node):
                     self.pose_initialized = False
                     self.last_ik_joint_positions = None
                     self._ik_smooth_target = None
+                    self._ik_smooth_vel = None
                     self.get_logger().info('>>> 已关闭重力补偿：恢复控制器控制 <<<')
             else:
                 self.get_logger().error('零力矩模式切换失败')
@@ -811,6 +835,7 @@ class XboxTeleopNode(Node):
         self.last_ik_joint_positions = None
         self.smoothed_joint_positions = None
         self._ik_smooth_target = None
+        self._ik_smooth_vel = None
         self.get_logger().info('>>> 主从遥操作已关闭：恢复 Xbox 控制 <<<')
 
     def _set_master_zero_torque(self, enable):
@@ -947,8 +972,65 @@ class XboxTeleopNode(Node):
             self.get_logger().info(
                 f'[主从跟随-SDK] dt={dt*1000:.1f}ms L1-L7=[{pos_str}]')
 
+    def _control_loop(self):
+        """Dedicated 100Hz control thread with precise timing."""
+        period = 1.0 / self.update_rate
+        next_tick = time.monotonic()
+        while self._control_running and rclpy.ok():
+            next_tick += period
+            try:
+                self.update_callback()
+            except Exception as e:
+                self.get_logger().error(
+                    f'update_callback 异常：{e}', throttle_duration_sec=2.0)
+            now = time.monotonic()
+            sleep_s = next_tick - now
+            if sleep_s < -period:
+                next_tick = now + period
+            elif sleep_s > 0:
+                time.sleep(sleep_s)
+
     def update_callback(self):
         """Periodic update callback"""
+        # Measure actual dt to compensate for scheduler jitter
+        now = time.monotonic()
+        if self._last_update_time is not None:
+            measured_dt = now - self._last_update_time
+            nominal_dt = 1.0 / self.update_rate
+            if 0.25 * nominal_dt < measured_dt < 4.0 * nominal_dt:
+                self.dt = measured_dt
+            else:
+                self.dt = nominal_dt
+        self._last_update_time = now
+
+        self._diag_tick = getattr(self, '_diag_tick', 0) + 1
+        self._diag_last_report = getattr(self, '_diag_last_report', now)
+        self._diag_dt_min = min(getattr(self, '_diag_dt_min', 1.0), self.dt)
+        self._diag_dt_max = max(getattr(self, '_diag_dt_max', 0.0), self.dt)
+        if now - self._diag_last_report >= 5.0:
+            jc = getattr(self, '_diag_jac_calls', 0)
+            jo = getattr(self, '_diag_jac_ok', 0)
+            je = getattr(self, '_diag_jac_err', 0)
+            mc = getattr(self, '_diag_moveit_calls', 0)
+            dt_min_ms = self._diag_dt_min * 1000
+            dt_max_ms = self._diag_dt_max * 1000
+            raw_deltas = getattr(self, '_diag_raw_deltas', [])
+            nz = sum(1 for d in raw_deltas if abs(d) > 1e-9)
+            self.get_logger().info(
+                f'[DIAG] ticks={self._diag_tick} jac={jc}/{jo}/{je} '
+                f'dt={dt_min_ms:.1f}-{dt_max_ms:.1f}ms '
+                f'raw_delta_nz={nz}/{len(raw_deltas)} '
+                f'pose_init={self.pose_initialized}')
+            self._diag_tick = 0
+            self._diag_jac_calls = 0
+            self._diag_jac_ok = 0
+            self._diag_jac_err = 0
+            self._diag_moveit_calls = 0
+            self._diag_dt_min = 1.0
+            self._diag_dt_max = 0.0
+            self._diag_raw_deltas = []
+            self._diag_last_report = now
+
         if self.current_joy is None:
             return
         
@@ -1030,6 +1112,7 @@ class XboxTeleopNode(Node):
                     self.home_start_time = None
                     self.pose_initialized = False
                     self._ik_smooth_target = None
+                    self._ik_smooth_vel = None
                 else:
                     return
             else:
@@ -1214,13 +1297,110 @@ class XboxTeleopNode(Node):
         else:
             self.send_cartesian_path_goal()
     
-    def send_ik_goal(self):
-        """Compute joints via IK service (SDK) and publish trajectory - 50Hz fast mode.
-        
-        At most one IK request is in flight at a time. If called while a
-        previous request is pending, the latest target pose is marked for
-        automatic re-send once the current callback completes.
+    def _get_ik_seed(self):
+        """Return the best available IK seed (previous raw solution > last IK > joint_states)."""
+        seed = self._last_ik_raw_for_seed or self.last_ik_joint_positions
+        if seed is None and self.current_joint_state:
+            seed = []
+            for name in self.joint_names:
+                if name in self.current_joint_state.name:
+                    idx = self.current_joint_state.name.index(name)
+                    seed.append(self.current_joint_state.position[idx])
+                else:
+                    seed.append(0.0)
+        return seed
+
+    def _process_ik_result(self, ik_positions):
+        """Validate and store an IK solution (jump protection + buffer write).
+
+        Returns True if the solution was accepted, False otherwise.
         """
+        self.publish_ik_raw_debug(ik_positions)
+
+        prev_raw = getattr(self, '_diag_prev_raw_j1', None)
+        if prev_raw is not None and len(ik_positions) > 1:
+            delta = ik_positions[1] - prev_raw
+            raw_deltas = getattr(self, '_diag_raw_deltas', [])
+            raw_deltas.append(delta)
+            self._diag_raw_deltas = raw_deltas
+        if len(ik_positions) > 1:
+            self._diag_prev_raw_j1 = ik_positions[1]
+
+        ik_ref = self._last_ik_raw_for_seed or self.last_ik_joint_positions
+        if ik_ref is not None:
+            max_diff = max(abs(ik_positions[i] - ik_ref[i])
+                           for i in range(len(ik_positions)))
+
+            if max_diff > self.max_ik_jump_threshold:
+                if self.ik_seed_just_initialized:
+                    self.get_logger().info(
+                        f'IK 种子初始化后的首帧：接受 IK 解（diff={max_diff:.3f}rad）')
+                    self.ik_seed_just_initialized = False
+                else:
+                    self.consecutive_ik_rejects += 1
+                    if self.consecutive_ik_rejects >= self.singularity_warning_count:
+                        self.get_logger().warn(
+                            f'疑似奇异区：IK 跳变={max_diff:.3f}rad，'
+                            f'已保护 {self.consecutive_ik_rejects} 帧')
+                    if self.consecutive_ik_rejects >= 50:
+                        self.get_logger().warn(
+                            'IK 解已连续拒绝 50+ 帧，自动重新同步位姿...')
+                        self.pose_initialized = False
+                        self.smoothed_joint_positions = None
+                        self.last_ik_joint_positions = None
+                        self._ik_smooth_target = None
+                        self._ik_smooth_vel = None
+                        self.consecutive_ik_rejects = 0
+                    return False
+            else:
+                if self.consecutive_ik_rejects > 0:
+                    self.consecutive_ik_rejects = 0
+                if self.ik_seed_just_initialized:
+                    self.ik_seed_just_initialized = False
+
+        self._last_ik_raw_for_seed = list(ik_positions)
+        self._latest_ik_raw = list(ik_positions)
+        self._latest_ik_consumed = False
+        self.last_sent_pose = copy.deepcopy(self.target_pose)
+        return True
+
+    def send_ik_goal(self):
+        """Jacobian differential IK (< 0.1ms) with MoveIt fallback."""
+        if self._local_kin is not None:
+            self._diag_jac_calls = getattr(self, '_diag_jac_calls', 0) + 1
+            q = self._get_ik_seed()
+            if q is None:
+                self.get_logger().warn('Jacobian: seed is None', throttle_duration_sec=2.0)
+                return
+
+            try:
+                J_full = self._local_kin.compute_jacobian(q)
+                J = J_full[:, :6]
+
+                v = np.array([
+                    self.smoothed_vx, self.smoothed_vy, self.smoothed_vz,
+                    self.smoothed_vroll, self.smoothed_vpitch, self.smoothed_vyaw,
+                ])
+
+                damping = 1e-4
+                JJt = J @ J.T + damping * np.eye(6)
+                dq = J.T @ np.linalg.solve(JJt, v)
+
+                q_new = [q[i] + float(dq[i]) * self.dt for i in range(6)]
+                self._process_ik_result(q_new)
+                self._diag_jac_ok = getattr(self, '_diag_jac_ok', 0) + 1
+            except Exception as e:
+                self._diag_jac_err = getattr(self, '_diag_jac_err', 0) + 1
+                self.get_logger().error(
+                    f'Jacobian IK 异常：{e}', throttle_duration_sec=1.0)
+            return
+        else:
+            self._diag_moveit_calls = getattr(self, '_diag_moveit_calls', 0) + 1
+
+        self._send_ik_goal_moveit()
+
+    def _send_ik_goal_moveit(self):
+        """Fallback: async IK via MoveIt /compute_ik service."""
         import time as _time
 
         if self.pending_ik_request:
@@ -1231,21 +1411,13 @@ class XboxTeleopNode(Node):
                 self._ik_resend_needed = True
                 return
         self._ik_resend_needed = False
-        
+
         if not self._master_sdk or not self._master_sdk._connected:
             self.get_logger().warn('SDK 未连接，跳过 IK 请求', throttle_duration_sec=5.0)
             return
-        
-        seed = self._last_ik_raw_for_seed or self.last_ik_joint_positions
-        if seed is None and self.current_joint_state:
-            seed = []
-            for name in self.joint_names:
-                if name in self.current_joint_state.name:
-                    idx = self.current_joint_state.name.index(name)
-                    seed.append(self.current_joint_state.position[idx])
-                else:
-                    seed.append(0.0)
-        
+
+        seed = self._get_ik_seed()
+
         self.pending_ik_request = True
         self._ik_request_time = _time.time()
         try:
@@ -1255,16 +1427,13 @@ class XboxTeleopNode(Node):
                 avoid_collisions=self.collision_check_active,
                 timeout_ns=10_000_000,
             )
-            future.add_done_callback(self.ik_callback)
+            future.add_done_callback(self._ik_callback_moveit)
         except Exception as e:
             self.pending_ik_request = False
             self.get_logger().error(f'ComputeIKAsync 调用失败：{e}')
-    
-    def ik_callback(self, future):
-        """IK completion callback - store result in buffer for fixed-rate output.
 
-        Does NOT send motor commands; the 50Hz timer consumes _latest_ik_raw.
-        """
+    def _ik_callback_moveit(self, future):
+        """MoveIt IK async callback (fallback path)."""
         self.pending_ik_request = False
 
         if self.master_slave_mode or self.entering_master_slave:
@@ -1272,7 +1441,6 @@ class XboxTeleopNode(Node):
 
         try:
             response = future.result()
-
             if response.error_code.val != 1:
                 self.get_logger().debug(f'IK 失败：error_code={response.error_code.val}')
                 return
@@ -1286,61 +1454,19 @@ class XboxTeleopNode(Node):
                 else:
                     return
 
-            self.publish_ik_raw_debug(ik_positions)
-
-            # Singularity / jump protection (compare against last raw IK, not smoothed output)
-            ik_ref = self._last_ik_raw_for_seed or self.last_ik_joint_positions
-            if ik_ref is not None:
-                max_diff = max(abs(ik_positions[i] - ik_ref[i])
-                               for i in range(len(ik_positions)))
-
-                if max_diff < 0.0001:
-                    return
-
-                if max_diff > self.max_ik_jump_threshold:
-                    if self.ik_seed_just_initialized:
-                        self.get_logger().info(
-                            f'IK 种子初始化后的首帧：接受 IK 解（diff={max_diff:.3f}rad）')
-                        self.ik_seed_just_initialized = False
-                    else:
-                        self.consecutive_ik_rejects += 1
-                        if self.consecutive_ik_rejects >= self.singularity_warning_count:
-                            self.get_logger().warn(
-                                f'疑似奇异区：IK 跳变={max_diff:.3f}rad，'
-                                f'已保护 {self.consecutive_ik_rejects} 帧')
-                        if self.consecutive_ik_rejects >= 50:
-                            self.get_logger().warn(
-                                'IK 解已连续拒绝 50+ 帧，自动重新同步位姿...')
-                            self.pose_initialized = False
-                            self.smoothed_joint_positions = None
-                            self.last_ik_joint_positions = None
-                            self._ik_smooth_target = None
-                            self.consecutive_ik_rejects = 0
-                        return
-                else:
-                    if self.consecutive_ik_rejects > 0:
-                        self.consecutive_ik_rejects = 0
-                    if self.ik_seed_just_initialized:
-                        self.ik_seed_just_initialized = False
-
-            # Store accepted IK result for the 50Hz timer to consume
-            self._last_ik_raw_for_seed = list(ik_positions)
-            self._latest_ik_raw = list(ik_positions)
-            self._latest_ik_consumed = False
-
-            self.last_sent_pose = copy.deepcopy(self.target_pose)
+            self._process_ik_result(ik_positions)
 
         except Exception as e:
             self.get_logger().error(f'IK 回调异常：{e}')
 
         if self._ik_resend_needed:
             self._ik_resend_needed = False
-            self.send_ik_goal()
+            self._send_ik_goal_moveit()
 
     def _send_fixed_rate_ik_command(self):
-        """Consume buffered IK result and send motor command at fixed 50Hz rate.
+        """Consume buffered IK result and send motor command at the timer rate.
 
-        Called from the timer so command timing is decoupled from IK latency.
+        With local Pinocchio IK, a fresh solution arrives every tick.
         """
         if self.master_slave_mode or self.entering_master_slave:
             return
@@ -1351,32 +1477,41 @@ class XboxTeleopNode(Node):
 
         if self._latest_ik_raw is not None and not self._latest_ik_consumed:
             self._latest_ik_consumed = True
+
+        # 2nd-order critically-damped filter (exact discrete matrix-exponential solution)
+        # Continuous: ẍ + 2ω·ẋ + ω²·x = ω²·target   (ζ=1, no overshoot)
+        # Exact discrete step avoids Euler instability at any ω·dt value.
+        if self._latest_ik_raw is not None:
             if self._ik_smooth_target is None:
                 self._ik_smooth_target = list(self._latest_ik_raw)
+                self._ik_smooth_vel = [0.0] * len(self._latest_ik_raw)
             else:
-                ik_ema = 0.5
-                self._ik_smooth_target = [
-                    ik_ema * raw + (1.0 - ik_ema) * prev
-                    for raw, prev in zip(self._latest_ik_raw, self._ik_smooth_target)
-                ]
+                omega = 30.0
+                dt = self.dt
+                a = omega * dt
+                ea = math.exp(-a)
+                for i in range(len(self._latest_ik_raw)):
+                    err = self._latest_ik_raw[i] - self._ik_smooth_target[i]
+                    vel = self._ik_smooth_vel[i]
+                    err_new = ea * ((1.0 + a) * err - dt * vel)
+                    vel_new = ea * (omega * omega * dt * err + (1.0 - a) * vel)
+                    self._ik_smooth_target[i] = self._latest_ik_raw[i] - err_new
+                    self._ik_smooth_vel[i] = vel_new
 
         if self._ik_smooth_target is not None:
-            target_positions = self.smooth_joint_positions(self._ik_smooth_target)
+            target_positions = list(self._ik_smooth_target)
+            self.smoothed_joint_positions = target_positions
             self.publish_ik_debug(target_positions)
         else:
             return
 
-        ik_velocities = None
-        if self.last_ik_joint_positions is not None and self.dt > 0:
-            ik_velocities = [
-                (target_positions[i] - self.last_ik_joint_positions[i]) / self.dt
-                for i in range(len(target_positions))
-            ]
+        # Use analytic velocity from 2nd-order filter (much cleaner than numeric differentiation)
+        ik_velocities = list(self._ik_smooth_vel) if self._ik_smooth_vel else None
         self.last_ik_joint_positions = target_positions
 
         if self._master_sdk and self._master_sdk._connected:
             self._master_sdk.JointCtrlList(
-                target_positions, duration_ns=20_000_000,
+                target_positions, duration_ns=10_000_000,
                 velocities=ik_velocities)
 
     def smooth_joint_positions(self, target_positions):

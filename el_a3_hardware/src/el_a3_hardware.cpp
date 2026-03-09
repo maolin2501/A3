@@ -109,7 +109,7 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
   velocity_filter_alpha_ = 0.3;                        // 速度滤波系数
   
   // 默认参数
-  smoothing_alpha_ = 0.08;      // 平滑系数（越小越平滑）
+  smoothing_alpha_ = 0.8;       // 平滑系数（0.8 = 近直通，teleop 层已有充分平滑）
   max_velocity_ = 2.0;          // 最大速度 2 rad/s
   max_acceleration_ = 8.0;      // 最大加速度 8 rad/s²
   
@@ -300,6 +300,29 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_init(
 
   param_callback_handle_ = debug_node_->add_on_set_parameters_callback(
     std::bind(&RsA3HardwareInterface::onParameterChange, this, std::placeholders::_1));
+
+  // Create wall timers on debug_node_ for periodic publishing (off the write() hot path)
+  debug_timer_4hz_ = debug_node_->create_wall_timer(
+    std::chrono::milliseconds(250),
+    std::bind(&RsA3HardwareInterface::debugPublish4Hz, this));
+  debug_timer_10hz_ = debug_node_->create_wall_timer(
+    std::chrono::milliseconds(100),
+    std::bind(&RsA3HardwareInterface::debugPublish10Hz, this));
+  debug_timer_20hz_ = debug_node_->create_wall_timer(
+    std::chrono::milliseconds(50),
+    std::bind(&RsA3HardwareInterface::debugPublish20Hz, this));
+
+  // Start dedicated spin thread for debug_node_ (timers + parameter callbacks)
+  debug_thread_running_ = true;
+  debug_spin_thread_ = std::thread([this]() {
+    while (debug_thread_running_ && rclcpp::ok()) {
+      rclcpp::spin_some(debug_node_);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+
+  RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
+              "Debug publishing thread started (4/10/20 Hz timers, off write() hot path)");
 
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"),
               "Zero-torque mode: use controller_manager switch_controller "
@@ -595,6 +618,14 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_deactivate(
 hardware_interface::CallbackReturn RsA3HardwareInterface::on_shutdown(
   const rclcpp_lifecycle::State& /*previous_state*/)
 {
+  // Stop debug spin thread before tearing down node
+  if (debug_thread_running_) {
+    debug_thread_running_ = false;
+    if (debug_spin_thread_.joinable()) {
+      debug_spin_thread_.join();
+    }
+  }
+
   on_deactivate(rclcpp_lifecycle::State());
   on_cleanup(rclcpp_lifecycle::State());
   
@@ -825,15 +856,16 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     // ============ Position command processing ============
     double new_position = hw_commands_positions_[i];
     
-    // Use controller-provided spline-interpolated velocity (from JointTrajectoryController)
-    double controller_velocity = hw_commands_velocities_[i];
-    
     // EMA position smoothing (smoothing_alpha_: 0=hold, 1=direct passthrough)
     smoothed_positions_[i] = smoothing_alpha_ * new_position
                            + (1.0 - smoothing_alpha_) * smoothed_positions_[i];
 
-    smoothed_accelerations_[i] = (controller_velocity - smoothed_velocities_[i]) / dt;
-    smoothed_velocities_[i] = controller_velocity;
+    // Derive velocity from smoothed position to stay phase-aligned with position EMA
+    double smoothed_velocity = (smoothed_positions_[i] - last_cmd_positions_[i]) / dt;
+    last_cmd_positions_[i] = smoothed_positions_[i];
+
+    smoothed_accelerations_[i] = (smoothed_velocity - smoothed_velocities_[i]) / dt;
+    smoothed_velocities_[i] = smoothed_velocity;
     
     if (applyJointLimitProtection(i, smoothed_positions_[i])) {
       global_stop = true;
@@ -851,7 +883,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     
     {
       // 4-sample moving average pre-filter (null at 50Hz = teleop segment rate)
-      vel_ma_buffer_[i][vel_ma_idx_[i]] = controller_velocity;
+      vel_ma_buffer_[i][vel_ma_idx_[i]] = smoothed_velocity;
       vel_ma_idx_[i] = (vel_ma_idx_[i] + 1) % 4;
       double ma_velocity = 0.0;
       for (int k = 0; k < 4; ++k) ma_velocity += vel_ma_buffer_[i][k];
@@ -885,7 +917,7 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     filtered_velocity *= fade;
 
     // Soft clamp via tanh instead of hard clamp (smooth near ±max)
-    const double max_velocity_ff = 0.3;
+    const double max_velocity_ff = 1.2;
     filtered_velocity = max_velocity_ff * std::tanh(filtered_velocity / max_velocity_ff);
     
     velocity_ff_stage2_[i] = filtered_velocity;
@@ -896,8 +928,8 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     // Debug: periodic log output
     if (write_counter % 1000 == 0 && i == 0) {
       RCLCPP_DEBUG(rclcpp::get_logger("RsA3HardwareInterface"),
-                  "[速度前馈] 控制器速度=%.3f，滤波后=%.3f",
-                  controller_velocity, filtered_velocity);
+                  "[速度前馈] 平滑位置差分速度=%.3f，滤波后=%.3f",
+                  smoothed_velocity, filtered_velocity);
     }
     
     // ============ Compute gravity compensation torque (as feedforward by ratio) ============
@@ -985,37 +1017,42 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     }
   }
 
-  // === Debug publishing moved to low-frequency path to keep CAN send timing clean ===
-  // spin_some deferred to every 50 cycles (~4Hz) instead of every cycle
-  if (write_counter % 50 == 0 && debug_node_) {
-    rclcpp::spin_some(debug_node_);
-  }
+  // Debug publishing is handled by dedicated timers in the debug spin thread,
+  // keeping this hot path clean for deterministic CAN timing.
 
-  // Debug info at ~4Hz (every 50 cycles) — reduced from 20Hz to minimize write() jitter
-  if (write_counter % 50 == 0 && debug_node_ && hw_cmd_pub_ && smoothed_cmd_pub_) {
-    auto now = debug_node_->get_clock()->now();
-    
-    sensor_msgs::msg::JointState hw_cmd_msg;
-    hw_cmd_msg.header.stamp = now;
-    for (const auto& config : joint_configs_) {
-      hw_cmd_msg.name.push_back(config.name);
-    }
-    hw_cmd_msg.position = hw_commands_positions_;
-    hw_cmd_pub_->publish(hw_cmd_msg);
-    
-    sensor_msgs::msg::JointState smoothed_msg;
-    smoothed_msg.header.stamp = now;
-    smoothed_msg.name = hw_cmd_msg.name;
-    smoothed_msg.position = smoothed_positions_;
-    smoothed_msg.velocity = velocity_ff_stage2_;
-    smoothed_cmd_pub_->publish(smoothed_msg);
+  write_counter++;
+  return hardware_interface::return_type::OK;
+}
+
+// ============ Debug publish timer callbacks (run in debug spin thread) ============
+
+void RsA3HardwareInterface::debugPublish4Hz()
+{
+  if (!hw_cmd_pub_ || !smoothed_cmd_pub_) return;
+  auto now = debug_node_->get_clock()->now();
+
+  sensor_msgs::msg::JointState hw_cmd_msg;
+  hw_cmd_msg.header.stamp = now;
+  for (const auto& config : joint_configs_) {
+    hw_cmd_msg.name.push_back(config.name);
   }
-  
-  // Gravity torque at ~10Hz (every 20 cycles) — reduced from 200Hz
-  if (write_counter % 20 == 0 && gravity_comp_enabled_ && gravity_torque_pub_ && debug_node_) {
-    auto now_g = debug_node_->get_clock()->now();
+  hw_cmd_msg.position = hw_commands_positions_;
+  hw_cmd_pub_->publish(hw_cmd_msg);
+
+  sensor_msgs::msg::JointState smoothed_msg;
+  smoothed_msg.header.stamp = now;
+  smoothed_msg.name = hw_cmd_msg.name;
+  smoothed_msg.position = smoothed_positions_;
+  smoothed_msg.velocity = velocity_ff_stage2_;
+  smoothed_cmd_pub_->publish(smoothed_msg);
+}
+
+void RsA3HardwareInterface::debugPublish10Hz()
+{
+  if (gravity_comp_enabled_ && gravity_torque_pub_) {
+    auto now = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState gravity_msg;
-    gravity_msg.header.stamp = now_g;
+    gravity_msg.header.stamp = now;
     for (const auto& config : joint_configs_) {
       gravity_msg.name.push_back(config.name);
     }
@@ -1024,21 +1061,8 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     }
     gravity_torque_pub_->publish(gravity_msg);
   }
-  
-  // Velocity feedforward at ~20Hz (every 10 cycles) — reduced from 200Hz
-  if (write_counter % 10 == 0 && velocity_ff_pub_ && debug_node_) {
-    auto now = debug_node_->get_clock()->now();
-    sensor_msgs::msg::JointState velocity_ff_msg;
-    velocity_ff_msg.header.stamp = now;
-    for (const auto& config : joint_configs_) {
-      velocity_ff_msg.name.push_back(config.name);
-    }
-    velocity_ff_msg.velocity = velocity_ff_stage2_;
-    velocity_ff_pub_->publish(velocity_ff_msg);
-  }
 
-  // Filtered torque feedback at ~10Hz (every 20 cycles) — reduced from 40Hz
-  if (write_counter % 20 == 0 && torque_feedback_pub_ && debug_node_) {
+  if (torque_feedback_pub_) {
     auto now = debug_node_->get_clock()->now();
     sensor_msgs::msg::JointState torque_msg;
     torque_msg.header.stamp = now;
@@ -1048,9 +1072,19 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     torque_msg.effort = filtered_torque_feedback_;
     torque_feedback_pub_->publish(torque_msg);
   }
+}
 
-  write_counter++;
-  return hardware_interface::return_type::OK;
+void RsA3HardwareInterface::debugPublish20Hz()
+{
+  if (!velocity_ff_pub_) return;
+  auto now = debug_node_->get_clock()->now();
+  sensor_msgs::msg::JointState velocity_ff_msg;
+  velocity_ff_msg.header.stamp = now;
+  for (const auto& config : joint_configs_) {
+    velocity_ff_msg.name.push_back(config.name);
+  }
+  velocity_ff_msg.velocity = velocity_ff_stage2_;
+  velocity_ff_pub_->publish(velocity_ff_msg);
 }
 
 double RsA3HardwareInterface::computeGravityTorque(size_t joint_idx, double position)

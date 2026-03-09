@@ -27,7 +27,7 @@
           <param name="max_acceleration">15.0</param>   <!-- Max acceleration limit rad/s² -->
           <param name="max_jerk">50.0</param>           <!-- Max jerk limit rad/s³ -->
           <!-- Fallback smoothing filter parameters (used when S-curve is disabled) -->
-          <param name="smoothing_alpha">0.2</param>     <!-- Low-pass filter coefficient -->
+          <param name="smoothing_alpha">0.8</param>     <!-- Low-pass filter coefficient (0.8 = near-passthrough, teleop already smooths) -->
           
           <!-- Gravity compensation feedforward parameters (100% gravity as feedforward torque, matching zero-torque mode) -->
           <param name="gravity_feedforward_ratio">0.85</param>  <!-- 85% gravity compensation ratio, avoid over-compensation oscillation -->

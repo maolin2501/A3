@@ -2,11 +2,11 @@
 
 xbox_teleop_node:
   ros__parameters:
-    # Update rate (Hz) - 50Hz for faster response
-    update_rate: 50.0
+    # Update rate (Hz) - 100Hz with Jacobian differential IK
+    update_rate: 100.0
     
-    # Use fast IK mode (true=50Hz IK direct control, false=traditional path planning)
-    # Fast IK mode: calls IK service each frame to compute joint positions, publishes directly to controller, achieving true 50Hz
+    # Use fast IK mode (true=100Hz Jacobian IK, false=traditional path planning)
+    # Fast IK mode: Jacobian pseudo-inverse each tick for instant joint velocity, 100Hz
     # Traditional mode: uses GetCartesianPath service for full path planning, actual rate ~5-10Hz
     use_fast_ik_mode: true
     
@@ -23,7 +23,7 @@ xbox_teleop_node:
     
     # ============ Input smoothing parameters ============
     # Smooth joystick input filtering (optional, independent from joint smoothing)
-    input_smoothing_factor: 0.7    # Input smoothing factor (0-1), larger = more responsive
+    input_smoothing_factor: 0.3    # Input smoothing factor (0-1), lower = smoother velocity input
     
     # ============ Singularity protection parameters ============
     # Detect and reject IK solution jumps to prevent violent motion near singularities
