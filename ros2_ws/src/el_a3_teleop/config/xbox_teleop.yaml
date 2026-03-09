@@ -23,7 +23,7 @@ xbox_teleop_node:
     
     # ============ Input smoothing parameters ============
     # Smooth joystick input filtering (optional, independent from joint smoothing)
-    input_smoothing_factor: 0.3    # Input smoothing factor (0-1), lower = smoother velocity input
+    input_smoothing_factor: 0.15   # Input smoothing factor (0-1), lower = smoother velocity input
     
     # ============ Singularity protection parameters ============
     # Detect and reject IK solution jumps to prevent violent motion near singularities

@@ -67,7 +67,7 @@ class XboxTeleopNode(Node):
         self.declare_parameter('max_joint_acceleration', 5.0)  # rad/s² max single joint acceleration
         
         # Input smoothing parameters
-        self.declare_parameter('input_smoothing_factor', 0.3)  # Input smoothing coefficient
+        self.declare_parameter('input_smoothing_factor', 0.15)  # Input smoothing coefficient
         
         # Singularity protection parameters
         self.declare_parameter('max_ik_jump_threshold', 0.5)   # rad max allowed single joint jump
@@ -1382,7 +1382,12 @@ class XboxTeleopNode(Node):
                     self.smoothed_vroll, self.smoothed_vpitch, self.smoothed_vyaw,
                 ])
 
-                damping = 1e-4
+                v_norm = np.linalg.norm(v[:3])
+                w_norm = np.linalg.norm(v[3:])
+                if v_norm < 5e-4 and w_norm < 5e-3:
+                    v[:] = 0.0
+
+                damping = 1e-3
                 JJt = J @ J.T + damping * np.eye(6)
                 dq = J.T @ np.linalg.solve(JJt, v)
 
@@ -1486,7 +1491,7 @@ class XboxTeleopNode(Node):
                 self._ik_smooth_target = list(self._latest_ik_raw)
                 self._ik_smooth_vel = [0.0] * len(self._latest_ik_raw)
             else:
-                omega = 30.0
+                omega = 12.0
                 dt = self.dt
                 a = omega * dt
                 ea = math.exp(-a)
