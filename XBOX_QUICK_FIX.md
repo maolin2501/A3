@@ -46,7 +46,7 @@
 如果上述方法都不行，需要安装xpadneo驱动：
 
 ```bash
-bash /home/wy/RS/A3/scripts/install_xpadneo.sh
+bash ./scripts/install_xpadneo.sh
 ```
 
 这个驱动专门为蓝牙Xbox手柄设计，安装后：
@@ -67,13 +67,13 @@ $ ls /dev/input/js*
 一旦手柄设备就绪，运行：
 
 ```bash
-bash /home/wy/RS/A3/scripts/start_xbox_control.sh
+bash ./scripts/start_xbox_control.sh
 ```
 
 或手动启动：
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch el_a3_teleop simple_teleop.launch.py
@@ -164,7 +164,7 @@ dmesg | grep -i "xbox\|input" | tail -20
 
 **准备好后运行**：
 ```bash
-bash /home/wy/RS/A3/scripts/start_xbox_control.sh
+bash ./scripts/start_xbox_control.sh
 ```
 
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 # Bluetooth Xbox controller setup script
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "========================================"
 echo "   Bluetooth Xbox Controller Setup Wizard"
 echo "========================================"
@@ -135,7 +138,7 @@ if [ -e /dev/input/js0 ]; then
     echo "   ros2 topic echo /joy"
     echo ""
     echo "3. Launch full control system:"
-    echo "   cd /home/wy/RS/A3/ros2_ws"
+    echo "   cd $PROJECT_ROOT/ros2_ws"
     echo "   source install/setup.bash"
     echo "   ros2 launch el_a3_teleop simple_teleop.launch.py"
 else
@@ -152,7 +155,7 @@ else
     echo "   bash $0"
     echo ""
     echo "3. View detailed setup guide:"
-    echo "   cat /home/wy/RS/A3/BLUETOOTH_XBOX_SETUP.md"
+    echo "   cat $PROJECT_ROOT/BLUETOOTH_XBOX_SETUP.md"
 fi
 echo ""
 

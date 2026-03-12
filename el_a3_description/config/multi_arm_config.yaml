@@ -16,7 +16,7 @@ arms:
     host_can_id: 253
     wrist_motor_type: "RS05"  # Wrist motor type: RS05 (motors 4-7)
     enabled: false            # Disabled - only arm1 active
-    inertia_config_path: "/home/wy/RS/A3/el_a3_description/config/inertia_params_arm2.yaml"
+    inertia_config_path: "inertia_params_arm2.yaml"
     
   arm3:
     prefix: "arm3_"

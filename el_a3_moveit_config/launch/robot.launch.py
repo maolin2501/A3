@@ -183,6 +183,13 @@ def generate_launch_description():
                    "--controller-manager-timeout", "120"],
     )
 
+    zero_torque_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["zero_torque_controller", "-c", "/controller_manager",
+                   "--controller-manager-timeout", "120", "--inactive"],
+    )
+
     # Move group - delay start until controllers are ready
     move_group_node = Node(
         package="moveit_ros_move_group",
@@ -219,7 +226,7 @@ def generate_launch_description():
     delay_arm_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
-            on_exit=[arm_controller_spawner, gripper_controller_spawner],
+            on_exit=[arm_controller_spawner, gripper_controller_spawner, zero_torque_controller_spawner],
         )
     )
 
@@ -240,11 +247,10 @@ def generate_launch_description():
         rviz_node,
     ]
 
-    no_shm_xml = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-        'ros2_ws', 'fastrtps_no_shm.xml')
+    _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    no_shm_xml = os.path.join(_project_root, 'ros2_ws', 'fastrtps_no_shm.xml')
     if not os.path.isfile(no_shm_xml):
-        no_shm_xml = '/home/wy/RS/A3/ros2_ws/fastrtps_no_shm.xml'
+        no_shm_xml = os.path.join(_project_root, 'fastrtps_no_shm.xml')
     set_fastrtps_env = SetEnvironmentVariable(
         'FASTRTPS_DEFAULT_PROFILES_FILE', no_shm_xml)
 

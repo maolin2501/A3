@@ -1,6 +1,9 @@
 #!/bin/bash
 # Wait for Xbox controller device to appear and automatically launch control system
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "========================================"
 echo "   Waiting for Xbox controller..."
 echo "========================================"
@@ -42,14 +45,14 @@ if [ ! -e /dev/input/js0 ]; then
     echo "Possible solutions:"
     echo ""
     echo "1. Install xpadneo driver:"
-    echo "   bash /home/wy/RS/A3/scripts/install_xpadneo.sh"
+    echo "   bash $SCRIPT_DIR/install_xpadneo.sh"
     echo ""
     echo "2. Reconnect the controller:"
     echo "   - Bluetooth settings -> Disconnect Xbox controller"
     echo "   - Hold Xbox button to reconnect"
     echo ""
     echo "3. View detailed troubleshooting guide:"
-    echo "   cat /home/wy/RS/A3/XBOX_QUICK_FIX.md"
+    echo "   cat $PROJECT_ROOT/XBOX_QUICK_FIX.md"
     echo ""
     exit 1
 fi
@@ -64,7 +67,7 @@ echo -e "${BLUE}Testing controller input (2 seconds)...${NC}"
 echo "Please move sticks or press buttons..."
 echo ""
 
-cd /home/wy/RS/A3/ros2_ws
+cd "$PROJECT_ROOT/ros2_ws"
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 

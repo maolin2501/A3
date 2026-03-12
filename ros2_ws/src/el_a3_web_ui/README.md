@@ -35,7 +35,7 @@
 pip3 install flask flask-socketio eventlet python-socketio
 
 # 进入工作空间
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 
 # 设置ROS2环境
 source /opt/ros/humble/setup.bash
@@ -49,7 +49,7 @@ python3 src/el_a3_web_ui/el_a3_web_ui/web_server.py --port 5000
 
 ```bash
 # 先构建包
-cd /home/wy/RS/A3
+cd <project_root>
 colcon build --packages-select el_a3_web_ui
 
 # 启动

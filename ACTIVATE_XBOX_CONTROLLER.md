@@ -42,7 +42,7 @@ ls /dev/input/js0
 ### 测试2：使用ROS2 joy节点测试
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -58,7 +58,7 @@ cat /proc/bus/input/devices | grep -B 5 -A 5 "Xbox"
 
 在另一个终端：
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source install/setup.bash
 ros2 topic echo /joy
 ```
@@ -85,7 +85,7 @@ ros2 run joy joy_node --ros-args -p device_name:=/dev/input/event20 -p device_id
 编辑launch文件以使用event设备：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/launch/simple_teleop.launch.py
+nano ./ros2_ws/src/el_a3_teleop/launch/simple_teleop.launch.py
 ```
 
 将joy节点的参数改为：
@@ -98,7 +98,7 @@ nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/launch/simple_teleop.launch.py
 手柄工作后，启动仿真系统：
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -110,7 +110,7 @@ ros2 launch el_a3_teleop simple_teleop.launch.py
 我为您创建了一个启动脚本，执行：
 
 ```bash
-bash /home/wy/RS/A3/scripts/start_xbox_control.sh
+bash ./scripts/start_xbox_control.sh
 ```
 
 ## ⚠️ 如果遇到权限问题

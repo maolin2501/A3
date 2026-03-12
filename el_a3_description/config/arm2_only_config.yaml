@@ -7,7 +7,7 @@ arms:
     can_interface: "can1"
     host_can_id: 253
     enabled: true
-    inertia_config_path: "/home/wy/RS/A3/el_a3_description/config/inertia_params_arm2.yaml"
+    inertia_config_path: "inertia_params_arm2.yaml"
 
 global:
   update_rate: 200

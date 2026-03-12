@@ -263,7 +263,7 @@
   <link name="l4_l5_urdf_asm">
     <inertial>
       <origin xyz="-0.0241077 0.0297756 -0.000254349" rpy="0 0 0"/>
-      <mass value="0.44692"/>
+      <mass value="0.54692"/>
       <inertia ixx="0.000543249" ixy="0.000320527" ixz="2.88671e-06" 
                iyy="0.00040341" iyz="-3.57587e-06" izz="0.000797799"/>
     </inertial>
@@ -367,7 +367,7 @@
   <link name="l5_l6_urdf_asm">
     <inertial>
       <origin xyz="-1.16996e-05 0.000627615 -0.0701883" rpy="0 0 0"/>
-      <mass value="0.5317"/>
+      <mass value="0.6317"/>
       <inertia ixx="0.00100405" ixy="-4.97095e-06" ixz="1.06714e-07" 
                iyy="0.00139953" iyz="1.65952e-05" izz="0.00054217"/>
     </inertial>

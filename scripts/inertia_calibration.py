@@ -24,6 +24,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from builtin_interfaces.msg import Duration
 
+import os
 import numpy as np
 from scipy.optimize import minimize
 from dataclasses import dataclass, field
@@ -32,6 +33,9 @@ import time
 import argparse
 import yaml
 from datetime import datetime
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, '..'))
 
 try:
     import pinocchio as pin
@@ -45,8 +49,8 @@ except ImportError:
 @dataclass
 class CalibrationConfig:
     """Calibration config"""
-    urdf_path: str = "/home/wy/RS/A3/el_a3_description/urdf/el_a3.urdf"
-    output_path: str = "/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml"
+    urdf_path: str = os.path.join(_PROJECT_ROOT, 'el_a3_description', 'urdf', 'el_a3.urdf')
+    output_path: str = os.path.join(_PROJECT_ROOT, 'el_a3_description', 'config', 'inertia_params.yaml')
     
     joint_names: List[str] = field(default_factory=lambda: [
         'L1_joint', 'L2_joint', 'L3_joint', 'L4_joint', 'L5_joint', 'L6_joint'
@@ -850,10 +854,10 @@ def main():
     parser.add_argument('--wrist', action='store_true', help='Wrist mode (only L4/L5/L6)')
     parser.add_argument('--samples', type=int, default=40, help='Samples per point (default 40)')
     parser.add_argument('--output', type=str, 
-                        default='/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml',
+                        default=os.path.join(_PROJECT_ROOT, 'el_a3_description', 'config', 'inertia_params.yaml'),
                         help='Output config file path')
     parser.add_argument('--urdf', type=str,
-                        default='/home/wy/RS/A3/el_a3_description/urdf/el_a3.urdf',
+                        default=os.path.join(_PROJECT_ROOT, 'el_a3_description', 'urdf', 'el_a3.urdf'),
                         help='URDF file path')
     
     args = parser.parse_args()

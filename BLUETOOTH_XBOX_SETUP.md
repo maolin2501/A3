@@ -80,7 +80,7 @@ sudo usermod -a -G input $USER
 一旦手柄设备可用（`/dev/input/js0`），在新终端运行：
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -207,7 +207,7 @@ ros2 run joy joy_node
 设置完成后，重新启动仿真系统：
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -231,7 +231,7 @@ jstest /dev/input/js0
 # 移动摇杆看是否有反应
 
 # 终端2: 启动控制系统
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source install/setup.bash
 ros2 launch el_a3_teleop simple_teleop.launch.py
 
@@ -263,7 +263,7 @@ ros2 run joy joy_node --ros-args --log-level debug
 
 ---
 
-**下一步**：完成设置后，查看 `/home/wy/RS/A3/XBOX_HOW_TO_USE.md` 了解如何控制机器人。
+**下一步**：完成设置后，查看 `./XBOX_HOW_TO_USE.md` 了解如何控制机器人。
 
 
 

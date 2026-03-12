@@ -47,7 +47,7 @@ sudo apt install xboxdrv
 ## 编译
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 colcon build --packages-select el_a3_teleop
 source install/setup.bash

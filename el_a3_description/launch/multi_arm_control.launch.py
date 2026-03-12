@@ -55,8 +55,11 @@ def generate_arm_nodes(context, *args, **kwargs):
         host_can_id = arm_cfg.get('host_can_id', 253)
         
         # Inertia parameters config file path (each arm can be configured independently)
-        default_inertia_path = '/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml'
+        pkg_share = FindPackageShare('el_a3_description').perform(context)
+        default_inertia_path = os.path.join(pkg_share, 'config', 'inertia_params.yaml')
         inertia_config_path = arm_cfg.get('inertia_config_path', default_inertia_path)
+        if not os.path.isabs(inertia_config_path):
+            inertia_config_path = os.path.join(pkg_share, 'config', inertia_config_path)
         
         # Wrist motor type (EL05 or RS05)
         wrist_motor_type = arm_cfg.get('wrist_motor_type', 'EL05')

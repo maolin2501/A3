@@ -16,6 +16,7 @@ Xbox 手柄实时控制节点
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import Joy, JointState
 from geometry_msgs.msg import PoseStamped, Pose
 import tf2_ros
@@ -206,12 +207,12 @@ class XboxTeleopNode(Node):
         self._slave_sdk = None
         
         # Input smoothing filter state (exponential moving average)
-        self.smoothed_vx = 0.0  # Smoothed X velocity
-        self.smoothed_vy = 0.0  # Smoothed Y velocity
-        self.smoothed_vz = 0.0  # Smoothed Z velocity
-        self.smoothed_vroll = 0.0  # Smoothed Roll angular velocity
-        self.smoothed_vpitch = 0.0  # Smoothed Pitch angular velocity
-        self.smoothed_vyaw = 0.0  # Smoothed Yaw angular velocity
+        self.smoothed_vx = 0.0
+        self.smoothed_vy = 0.0
+        self.smoothed_vz = 0.0
+        self.smoothed_vroll = 0.0
+        self.smoothed_vpitch = 0.0
+        self.smoothed_vyaw = 0.0
         
         # Joint output smoothing state
         self.smoothed_joint_positions = None  # Smoothed joint positions
@@ -245,13 +246,21 @@ class XboxTeleopNode(Node):
         
         # IK and Cartesian path now handled by SDK (self._master_sdk)
         
-        # Subscribe to current joint states
+        # Subscribe to current joint states.
+        # Use TRANSIENT_LOCAL durability so we ONLY match the joint_state_broadcaster
+        # (TRANSIENT_LOCAL) and ignore the external ROS2UnityJointNode (VOLATILE)
+        # which publishes all-zero positions and causes oscillation.
         self.current_joint_state = None
+        js_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.joint_state_sub = self.create_subscription(
             JointState,
             '/joint_states',
             self.joint_state_callback,
-            10
+            js_qos
         )
         
         # Joint names (L1-L7 including gripper; IK uses L1-L6 only)
@@ -473,7 +482,14 @@ class XboxTeleopNode(Node):
             return False
             
     def joint_state_callback(self, msg):
-        """Joint state callback"""
+        """Joint state callback.
+
+        QoS TRANSIENT_LOCAL subscription already filters out the VOLATILE
+        ROS2UnityJointNode publisher.  Only accept messages that contain
+        our expected arm joints.
+        """
+        if not msg.name or len(msg.position) < len(msg.name):
+            return
         self.current_joint_state = msg
     
     def slave_joint_state_callback(self, msg):
@@ -992,21 +1008,19 @@ class XboxTeleopNode(Node):
 
     def update_callback(self):
         """Periodic update callback"""
-        # Measure actual dt to compensate for scheduler jitter
         now = time.monotonic()
+        nominal_dt = 1.0 / self.update_rate
+        self.dt = nominal_dt
         if self._last_update_time is not None:
             measured_dt = now - self._last_update_time
-            nominal_dt = 1.0 / self.update_rate
-            if 0.25 * nominal_dt < measured_dt < 4.0 * nominal_dt:
-                self.dt = measured_dt
-            else:
-                self.dt = nominal_dt
+        else:
+            measured_dt = nominal_dt
         self._last_update_time = now
 
         self._diag_tick = getattr(self, '_diag_tick', 0) + 1
         self._diag_last_report = getattr(self, '_diag_last_report', now)
-        self._diag_dt_min = min(getattr(self, '_diag_dt_min', 1.0), self.dt)
-        self._diag_dt_max = max(getattr(self, '_diag_dt_max', 0.0), self.dt)
+        self._diag_dt_min = min(getattr(self, '_diag_dt_min', 1.0), measured_dt)
+        self._diag_dt_max = max(getattr(self, '_diag_dt_max', 0.0), measured_dt)
         if now - self._diag_last_report >= 5.0:
             jc = getattr(self, '_diag_jac_calls', 0)
             jo = getattr(self, '_diag_jac_ok', 0)
@@ -1149,14 +1163,24 @@ class XboxTeleopNode(Node):
         # LB/RB control pitch velocity
         raw_vpitch = (joy.buttons[5] - joy.buttons[4]) * current_max_angular  # RB positive, LB negative (rad/s)
         
-        # Apply input smoothing filter (exponential moving average)
-        alpha = self.input_smoothing_factor
-        self.smoothed_vx = alpha * raw_vx + (1 - alpha) * self.smoothed_vx
-        self.smoothed_vy = alpha * raw_vy + (1 - alpha) * self.smoothed_vy
-        self.smoothed_vz = alpha * raw_vz + (1 - alpha) * self.smoothed_vz
-        self.smoothed_vroll = alpha * raw_vroll + (1 - alpha) * self.smoothed_vroll
-        self.smoothed_vpitch = alpha * raw_vpitch + (1 - alpha) * self.smoothed_vpitch
-        self.smoothed_vyaw = alpha * raw_vyaw + (1 - alpha) * self.smoothed_vyaw
+        # Rapid-stop: when all raw inputs are zero, snap EMA state to zero
+        raw_lin_mag = abs(raw_vx) + abs(raw_vy) + abs(raw_vz)
+        raw_ang_mag = abs(raw_vroll) + abs(raw_vpitch) + abs(raw_vyaw)
+        if raw_lin_mag < 1e-6 and raw_ang_mag < 1e-6:
+            self.smoothed_vx = 0.0
+            self.smoothed_vy = 0.0
+            self.smoothed_vz = 0.0
+            self.smoothed_vroll = 0.0
+            self.smoothed_vpitch = 0.0
+            self.smoothed_vyaw = 0.0
+        else:
+            alpha = self.input_smoothing_factor
+            self.smoothed_vx = alpha * raw_vx + (1 - alpha) * self.smoothed_vx
+            self.smoothed_vy = alpha * raw_vy + (1 - alpha) * self.smoothed_vy
+            self.smoothed_vz = alpha * raw_vz + (1 - alpha) * self.smoothed_vz
+            self.smoothed_vroll = alpha * raw_vroll + (1 - alpha) * self.smoothed_vroll
+            self.smoothed_vpitch = alpha * raw_vpitch + (1 - alpha) * self.smoothed_vpitch
+            self.smoothed_vyaw = alpha * raw_vyaw + (1 - alpha) * self.smoothed_vyaw
         
         # Velocity × dt = position delta
         dx = self.smoothed_vx * self.dt
@@ -1298,8 +1322,15 @@ class XboxTeleopNode(Node):
             self.send_cartesian_path_goal()
     
     def _get_ik_seed(self):
-        """Return the best available IK seed (previous raw solution > last IK > joint_states)."""
-        seed = self._last_ik_raw_for_seed or self.last_ik_joint_positions
+        """Return the best available IK seed (raw > filtered > last IK > joint_states).
+
+        Prefer the last raw IK solution so the Jacobian is evaluated at the
+        most recent solve point, avoiding the phase-lag oscillation that occurs
+        when the seed trails the raw output through the 2nd-order filter.
+        """
+        seed = (self._last_ik_raw_for_seed
+                or self._ik_smooth_target
+                or self.last_ik_joint_positions)
         if seed is None and self.current_joint_state:
             seed = []
             for name in self.joint_names:
@@ -1387,9 +1418,29 @@ class XboxTeleopNode(Node):
                 if v_norm < 5e-4 and w_norm < 5e-3:
                     v[:] = 0.0
 
-                damping = 1e-3
+                sigma = np.linalg.svd(J, compute_uv=False)
+                sigma_min = sigma[-1]
+                sigma_max = sigma[0]
+                cond = sigma_max / max(sigma_min, 1e-12)
+                sigma_thresh = 0.035
+                lambda_base = 5e-3
+                lambda_sing = 8e-2
+                cond_thresh = 80.0
+                lambda_cond = 2e-2
+                if sigma_min < sigma_thresh:
+                    r = (sigma_min / sigma_thresh) ** 2
+                    damping = lambda_base + lambda_sing * (1.0 - r)
+                else:
+                    damping = lambda_base
+                if cond > cond_thresh:
+                    rc = min((cond - cond_thresh) / cond_thresh, 1.0)
+                    damping = max(damping, lambda_base + lambda_cond * rc)
+
                 JJt = J @ J.T + damping * np.eye(6)
                 dq = J.T @ np.linalg.solve(JJt, v)
+
+                max_dq = self.max_joint_velocity
+                dq = np.clip(dq, -max_dq, max_dq)
 
                 q_new = [q[i] + float(dq[i]) * self.dt for i in range(6)]
                 self._process_ik_result(q_new)
@@ -1491,7 +1542,7 @@ class XboxTeleopNode(Node):
                 self._ik_smooth_target = list(self._latest_ik_raw)
                 self._ik_smooth_vel = [0.0] * len(self._latest_ik_raw)
             else:
-                omega = 12.0
+                omega = 14.0
                 dt = self.dt
                 a = omega * dt
                 ea = math.exp(-a)
@@ -1599,48 +1650,16 @@ class XboxTeleopNode(Node):
         """Publish IK debug info to /debug/ik_solution (continuous, even without input)"""
         ik_debug_msg = JointState()
         ik_debug_msg.header.stamp = self.get_clock().now().to_msg()
-        
-        # [Key change] Use joint_states order if known to align indices in Foxglove
-        if self.current_joint_state is not None:
-            ik_debug_msg.name = self.current_joint_state.name
-            
-            # Build name-to-position map
-            pos_map = {name: pos for name, pos in zip(self.joint_names, positions)}
-            
-            # Fill positions following joint_states order
-            ordered_positions = []
-            for name in ik_debug_msg.name:
-                if name in pos_map:
-                    ordered_positions.append(pos_map[name])
-                else:
-                    ordered_positions.append(0.0)  # Fallback
-            ik_debug_msg.position = ordered_positions
-        else:
-            # Fallback: use default order
-            ik_debug_msg.name = self.joint_names
-            ik_debug_msg.position = list(positions)
-            
+        ik_debug_msg.name = list(self.joint_names_7)
+        ik_debug_msg.position = list(positions) + [0.0] * (7 - len(positions))
         self.ik_solution_pub.publish(ik_debug_msg)
     
     def publish_ik_raw_debug(self, positions):
         """Publish raw IK solution (pre-processing) to /debug/ik_raw_solution for comparison"""
         ik_raw_msg = JointState()
         ik_raw_msg.header.stamp = self.get_clock().now().to_msg()
-        
-        if self.current_joint_state is not None:
-            ik_raw_msg.name = self.current_joint_state.name
-            pos_map = {name: pos for name, pos in zip(self.joint_names, positions)}
-            ordered_positions = []
-            for name in ik_raw_msg.name:
-                if name in pos_map:
-                    ordered_positions.append(pos_map[name])
-                else:
-                    ordered_positions.append(0.0)
-            ik_raw_msg.position = ordered_positions
-        else:
-            ik_raw_msg.name = self.joint_names
-            ik_raw_msg.position = list(positions)
-            
+        ik_raw_msg.name = list(self.joint_names_7)
+        ik_raw_msg.position = list(positions) + [0.0] * (7 - len(positions))
         self.ik_raw_solution_pub.publish(ik_raw_msg)
     
     def send_cartesian_path_goal(self):

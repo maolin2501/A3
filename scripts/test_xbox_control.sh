@@ -1,6 +1,9 @@
 #!/bin/bash
 # Xbox controller control system test script
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "=================================="
 echo "Xbox Controller Control System Test"
 echo "=================================="
@@ -24,7 +27,7 @@ fi
 
 # Check workspace
 echo -n "2. Checking workspace... "
-if [ -f "/home/wy/RS/A3/ros2_ws/install/setup.bash" ]; then
+if [ -f "$PROJECT_ROOT/ros2_ws/install/setup.bash" ]; then
     echo -e "${GREEN}Passed${NC}"
 else
     echo -e "${RED}Failed${NC}"
@@ -34,7 +37,7 @@ fi
 
 # Check el_a3_teleop package
 echo -n "3. Checking el_a3_teleop package... "
-source /home/wy/RS/A3/ros2_ws/install/setup.bash
+source "$PROJECT_ROOT/ros2_ws/install/setup.bash"
 if ros2 pkg list | grep -q el_a3_teleop; then
     echo -e "${GREEN}Passed${NC}"
 else
@@ -55,7 +58,7 @@ fi
 
 # Check launch files
 echo -n "5. Checking launch files... "
-LAUNCH_DIR="/home/wy/RS/A3/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/launch"
+LAUNCH_DIR="$PROJECT_ROOT/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/launch"
 if [ -f "$LAUNCH_DIR/complete_teleop.launch.py" ]; then
     echo -e "${GREEN}Passed${NC}"
 else
@@ -66,7 +69,7 @@ fi
 
 # Check config files
 echo -n "6. Checking config files... "
-CONFIG_DIR="/home/wy/RS/A3/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/config"
+CONFIG_DIR="$PROJECT_ROOT/ros2_ws/install/el_a3_teleop/share/el_a3_teleop/config"
 if [ -f "$CONFIG_DIR/xbox_servo_teleop.yaml" ]; then
     echo -e "${GREEN}Passed${NC}"
 else
@@ -129,7 +132,7 @@ echo "   ${GREEN}ros2 run joy joy_node${NC}"
 echo "   ${GREEN}ros2 topic echo /joy${NC}"
 echo ""
 echo "Detailed usage guide:"
-echo "   cat /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md"
+echo "   cat $PROJECT_ROOT/ros2_ws/src/el_a3_teleop/QUICK_START.md"
 echo ""
 
 

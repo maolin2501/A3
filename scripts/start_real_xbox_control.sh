@@ -57,7 +57,10 @@ echo ""
 echo "Press Ctrl+C to stop"
 echo "============================================"
 
-cd /home/wy/RS/A3/ros2_ws
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT/ros2_ws"
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=${CAN_INTERFACE}

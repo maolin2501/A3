@@ -2,9 +2,12 @@
 # Batch test return-to-zero error for different Kp values
 # Usage: ./batch_kp_test.sh
 
-WORKSPACE="/home/wy/RS/A3/ros2_ws"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+WORKSPACE="$PROJECT_ROOT/ros2_ws"
 XACRO_FILE="${WORKSPACE}/src/el_a3_description/urdf/el_a3_ros2_control.xacro"
-RESULT_FILE="/home/wy/RS/A3/kp_test_results.txt"
+RESULT_FILE="$PROJECT_ROOT/kp_test_results.txt"
 
 # Kp values to test
 KP_VALUES=(50 100 200 300)
@@ -48,7 +51,7 @@ for KP in "${KP_VALUES[@]}"; do
     
     # Run return-to-zero test
     echo "Running return-to-zero test..."
-    timeout 60 /usr/bin/python3 /home/wy/RS/A3/scripts/move_to_zero.py > /tmp/zero_test_${KP}.log 2>&1
+    timeout 60 /usr/bin/python3 "$SCRIPT_DIR/move_to_zero.py" > /tmp/zero_test_${KP}.log 2>&1
     
     # Wait for stabilization
     sleep 3

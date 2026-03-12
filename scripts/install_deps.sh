@@ -37,7 +37,7 @@ apt install -y can-utils
 echo "依赖安装完成！"
 echo ""
 echo "后续步骤："
-echo "1. cd /home/wy/RS/A3/ros2_ws"
+echo "1. cd <project_root>/ros2_ws"
 echo "2. source /opt/ros/humble/setup.bash"
 echo "3. colcon build --symlink-install"
 echo "4. source install/setup.bash"

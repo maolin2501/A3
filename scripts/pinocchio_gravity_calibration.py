@@ -459,8 +459,9 @@ class PinocchioGravityCalibrator(Node):
 
 def main():
     parser = argparse.ArgumentParser(description='Pinocchio 重力补偿标定')
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     parser.add_argument('--urdf', type=str, 
-                        default='/home/wy/RS/A3/install/el_a3_description/share/el_a3_description/urdf/el_a3.urdf',
+                        default=os.path.join(_project_root, 'el_a3_description', 'urdf', 'el_a3.urdf'),
                         help='URDF 文件路径')
     parser.add_argument('--quick', action='store_true', help='快速模式')
     parser.add_argument('--verify', action='store_true', help='仅验证模式')

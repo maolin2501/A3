@@ -13,8 +13,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # Enter workspace
-cd /home/wy/RS/A3/ros2_ws
+cd "$PROJECT_ROOT/ros2_ws"
 
 # Source environment
 echo -e "${BLUE}Setting up ROS2 environment...${NC}"

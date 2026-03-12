@@ -5,7 +5,7 @@
 ### 一键启动（仿真模式）
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -16,7 +16,7 @@ ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=true
 ### 真实硬件模式
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -35,7 +35,7 @@ ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
 
 ```bash
 # 终端1
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch el_a3_moveit_config robot.launch.py
@@ -45,7 +45,7 @@ ros2 launch el_a3_moveit_config robot.launch.py
 
 ```bash
 # 终端2
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source install/setup.bash
 ros2 run moveit_servo servo_node --ros-args --params-file src/el_a3_teleop/config/moveit_servo_config.yaml
 ```
@@ -54,7 +54,7 @@ ros2 run moveit_servo servo_node --ros-args --params-file src/el_a3_teleop/confi
 
 ```bash
 # 终端3
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source install/setup.bash
 ros2 launch el_a3_teleop xbox_servo_teleop.launch.py
 ```
@@ -118,7 +118,7 @@ ros2 topic echo /servo_node/status
 编辑配置文件以调整控制灵敏度：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
+nano ./ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
 ```
 
 主要参数：
@@ -142,7 +142,7 @@ nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
 如遇问题，请查看完整README：
 
 ```bash
-cat /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/README.md
+cat ./ros2_ws/src/el_a3_teleop/README.md
 ```
 
 

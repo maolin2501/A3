@@ -6,8 +6,9 @@
 无需硬件和 ROS，纯离线计算。
 """
 
+import os
 import sys
-sys.path.insert(0, "/home/wy/RS/A3")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from el_a3_sdk.trajectory import SCurvePlanner, MultiJointPlanner, CubicSplinePlanner
 

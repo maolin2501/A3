@@ -6,9 +6,10 @@
 需要 Pinocchio：pip install pin
 """
 
+import os
 import time
 import sys
-sys.path.insert(0, "/home/wy/RS/A3")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from el_a3_sdk import ELA3Interface, ArmEndPose
 

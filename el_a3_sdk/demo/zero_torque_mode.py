@@ -14,10 +14,12 @@ Pinocchio 实时计算重力补偿力矩，让拖动更轻松。
   2. 机械臂已上电
 """
 
+import os
 import time
 import math
 import sys
-sys.path.insert(0, "/home/wy/RS/A3")
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, _PROJECT_ROOT)
 
 from el_a3_sdk import ELA3Interface, LogLevel
 
@@ -28,7 +30,7 @@ def main():
     arm = ELA3Interface(
         can_name="can0",
         logger_level=LogLevel.INFO,
-        inertia_config_path="/home/wy/RS/A3/el_a3_description/config/inertia_params.yaml",
+        inertia_config_path=os.path.join(_PROJECT_ROOT, 'el_a3_description', 'config', 'inertia_params.yaml'),
     )
 
     if not arm.ConnectPort():
@@ -41,12 +43,12 @@ def main():
     if use_gravity_comp:
         print("\n=== 零力矩拖动模式 (Pinocchio 重力补偿) ===")
         print("机械臂可手动拖动，重力由 Pinocchio 实时补偿\n")
-        arm.ZeroTorqueModeWithGravity(enable=True, kd=1.0, update_rate=100.0)
+        arm.ZeroTorqueModeWithGravity(enable=True, kd=[0.05, 0.05, 0.05, 0.0125, 0.0125, 0.0125, 0.05], update_rate=100.0)
     else:
         print("\n=== 零力矩拖动模式 (基础) ===")
         print("机械臂可手动拖动，按 Ctrl+C 退出")
         print("提示: 使用 --gravity 或 -g 参数启用重力补偿\n")
-        arm.ZeroTorqueMode(enable=True, kd=1.0)
+        arm.ZeroTorqueMode(enable=True, kd=0.05)
 
     try:
         while True:

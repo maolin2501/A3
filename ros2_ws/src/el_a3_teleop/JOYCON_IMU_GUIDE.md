@@ -26,7 +26,7 @@
 ### 一键安装
 
 ```bash
-cd /home/wy/A3/scripts
+cd ./scripts
 sudo ./install_joycon_driver.sh
 ```
 
@@ -116,7 +116,7 @@ jstest /dev/input/js0
 ### 仿真模式（无需真实硬件）
 
 ```bash
-cd /home/wy/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -127,7 +127,7 @@ ros2 launch el_a3_teleop joycon_imu_teleop.launch.py
 
 ```bash
 # 1. 设置 CAN 接口
-sudo /home/wy/A3/scripts/setup_can.sh can0
+sudo ./scripts/setup_can.sh can0
 
 # 2. 启动遥控
 ros2 launch el_a3_teleop joycon_imu_teleop.launch.py \

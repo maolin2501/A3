@@ -53,12 +53,11 @@ def generate_launch_description():
         output='screen'
     )
     
-    no_shm_xml = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.realpath(__file__))))),
-        'fastrtps_no_shm.xml')
+    _ws_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.realpath(__file__)))))
+    no_shm_xml = os.path.join(_ws_root, 'fastrtps_no_shm.xml')
     if not os.path.isfile(no_shm_xml):
-        no_shm_xml = '/home/wy/RS/A3/ros2_ws/fastrtps_no_shm.xml'
+        no_shm_xml = os.path.join(os.path.dirname(_ws_root), 'ros2_ws', 'fastrtps_no_shm.xml')
     set_fastrtps_env = SetEnvironmentVariable(
         'FASTRTPS_DEFAULT_PROFILES_FILE', no_shm_xml)
 

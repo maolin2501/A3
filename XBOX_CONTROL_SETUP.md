@@ -46,7 +46,7 @@ sudo apt install joystick
 功能包已经编译完成。如果需要重新编译：
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 colcon build --packages-select el_a3_teleop
 source install/setup.bash
@@ -56,7 +56,7 @@ source install/setup.bash
 
 ```bash
 # 运行测试脚本
-cd /home/wy/RS/A3
+cd <project_root>
 bash scripts/test_xbox_control.sh
 ```
 
@@ -65,7 +65,7 @@ bash scripts/test_xbox_control.sh
 ### 方法1: 一键启动（推荐）
 
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -91,14 +91,14 @@ ros2 launch el_a3_teleop complete_teleop.launch.py use_mock_hardware:=false
 
 ```bash
 # 终端1: 启动机器人和MoveIt
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch el_a3_moveit_config robot.launch.py
 
 # 终端2: 启动MoveIt Servo
 ros2 run moveit_servo servo_node --ros-args \
-  --params-file /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
+  --params-file ./ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
 
 # 终端3: 启动手柄控制
 ros2 launch el_a3_teleop xbox_servo_teleop.launch.py
@@ -111,7 +111,7 @@ ros2 launch el_a3_teleop xbox_servo_teleop.launch.py
 编辑配置文件：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
+nano ./ros2_ws/src/el_a3_teleop/config/xbox_servo_teleop.yaml
 ```
 
 修改这些参数：
@@ -134,7 +134,7 @@ xbox_servo_teleop_node:
 编辑Servo配置：
 
 ```bash
-nano /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
+nano ./ros2_ws/src/el_a3_teleop/config/moveit_servo_config.yaml
 ```
 
 ## 🔍 调试和故障排除
@@ -201,26 +201,26 @@ ros2 topic echo /servo_node/status
 
 ```bash
 # 快速开始指南
-/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md
+./ros2_ws/src/el_a3_teleop/QUICK_START.md
 
 # 完整README
-/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/README.md
+./ros2_ws/src/el_a3_teleop/README.md
 
 # 详细使用指南
-/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
+./ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
 
 # 测试脚本
-/home/wy/RS/A3/scripts/test_xbox_control.sh
+./scripts/test_xbox_control.sh
 ```
 
 查看文档：
 
 ```bash
 # 查看快速开始
-cat /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md
+cat ./ros2_ws/src/el_a3_teleop/QUICK_START.md
 
 # 查看完整指南
-less /home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
+less ./ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md
 ```
 
 ## 🎯 下一步

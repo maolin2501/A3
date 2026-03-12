@@ -44,7 +44,7 @@ ls /dev/input/js0
 
 打开新终端：
 ```bash
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -78,7 +78,7 @@ ros2 topic echo /joy
 
 ## ⚙️ 当前配置
 
-控制参数（位于`/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/config/xbox_teleop.yaml`）：
+控制参数（位于`./ros2_ws/src/el_a3_teleop/config/xbox_teleop.yaml`）：
 
 - **更新频率**: 20 Hz
 - **平移速度**: 0.001 m/更新 (慢速，适合初学)
@@ -104,7 +104,7 @@ ros2 topic echo /joy
 ### 查看目标位姿
 ```bash
 # 新终端
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source install/setup.bash
 ros2 topic echo /target_pose
 ```
@@ -149,9 +149,9 @@ ros2 launch el_a3_teleop complete_teleop.launch.py
 
 ## 📚 更多信息
 
-- 快速入门指南: `/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/QUICK_START.md`
-- 完整使用指南: `/home/wy/RS/A3/ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md`
-- 安装指南: `/home/wy/RS/A3/XBOX_CONTROL_SETUP.md`
+- 快速入门指南: `./ros2_ws/src/el_a3_teleop/QUICK_START.md`
+- 完整使用指南: `./ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md`
+- 安装指南: `./XBOX_CONTROL_SETUP.md`
 
 ## 🎯 快速测试步骤
 
@@ -174,10 +174,10 @@ sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
 
 # 2. 启动控制系统
-cd /home/wy/RS/A3/ros2_ws
+cd ./ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-source /home/wy/RS/A3/install/setup.bash
+source ./install/setup.bash
 ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
 ```
 

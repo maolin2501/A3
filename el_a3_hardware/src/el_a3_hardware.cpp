@@ -24,8 +24,8 @@ namespace el_a3_hardware
 RsA3HardwareInterface::RsA3HardwareInterface()
   : can_interface_("can0")
   , host_can_id_(0xFD)
-  , position_kp_(60.0)    // 降低 Kp 以减小振荡
-  , position_kd_(3.5)     // 增大 Kd 以提高阻尼
+  , position_kp_(100.0)
+  , position_kd_(4.0)
   , velocity_limit_(10.0)
   , control_mode_(ControlMode::POSITION)
   , use_mock_hardware_(false)
@@ -594,6 +594,14 @@ hardware_interface::CallbackReturn RsA3HardwareInterface::on_activate(
               "全部 %zu 个电机初始化成功", joint_configs_.size());
   
   first_command_ = false;
+
+  gravity_input_positions_.resize(joint_configs_.size(), 0.0);
+  for (size_t i = 0; i < joint_configs_.size(); ++i) {
+    gravity_input_positions_[i] = initial_positions[i];
+    last_cmd_positions_[i] = initial_positions[i];
+    filtered_cmd_velocities_[i] = 0.0;
+    velocity_ff_stage2_[i] = 0.0;
+  }
 
   RCLCPP_INFO(rclcpp::get_logger("RsA3HardwareInterface"), 
               "硬件已激活（CSP 位置模式）");

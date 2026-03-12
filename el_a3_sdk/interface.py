@@ -482,7 +482,7 @@ class ELA3Interface:
                 )
                 time.sleep(0.00005)
 
-            logger.warning("零力矩模式已启用 (Kd=%.1f)", kd)
+            logger.warning("零力矩模式已启用 (Kd=%.3f)", kd)
         else:
             self._state = ArmState.ENABLED
             logger.info("零力矩模式已关闭，恢复位置控制")
@@ -1049,36 +1049,44 @@ class ELA3Interface:
     # ================================================================
 
     def ZeroTorqueModeWithGravity(
-        self, enable: bool, kd: float = 1.0, update_rate: float = 100.0,
+        self, enable: bool, kd=1.0, update_rate: float = 100.0,
     ) -> bool:
         """
         带重力补偿的零力矩模式（后台线程持续发送 Kp=0 + gravity_torque）
 
         Args:
             enable: True=启用, False=关闭
-            kd: 阻尼系数
+            kd: 阻尼系数，标量（所有关节相同）或列表（逐关节）
             update_rate: 重力补偿更新频率 (Hz)
         """
         if not self._connected:
             return False
 
         if enable:
+            if isinstance(kd, (list, tuple)):
+                kd_list = list(kd)
+                if len(kd_list) < self.NUM_JOINTS:
+                    kd_list += [kd_list[-1]] * (self.NUM_JOINTS - len(kd_list))
+            else:
+                kd_list = [float(kd)] * self.NUM_JOINTS
+
             kin = self._get_kinematics()
             if kin is None:
                 logger.warning("Pinocchio 不可用，使用无重力补偿零力矩模式")
-                return self.ZeroTorqueMode(True, kd=kd)
+                return self.ZeroTorqueMode(True, kd=kd_list[0])
 
             self._zero_torque_running = True
-            self._zero_torque_kd = kd
+            self._zero_torque_kd = kd_list[0]
             self._zero_torque_mode = True
             self._zero_torque_thread = threading.Thread(
                 target=self._zero_torque_gravity_loop,
-                args=(kd, 1.0 / update_rate),
+                args=(kd_list, 1.0 / update_rate),
                 daemon=True,
                 name="zero_torque_gravity",
             )
             self._zero_torque_thread.start()
-            logger.warning("零力矩模式已启用 (Kd=%.1f, 重力补偿=Pinocchio)", kd)
+            kd_str = ', '.join(f'{v:.4f}' for v in kd_list)
+            logger.warning("零力矩模式已启用 (Kd=[%s], 重力补偿=Pinocchio)", kd_str)
             return True
         else:
             self._zero_torque_running = False
@@ -1089,7 +1097,7 @@ class ELA3Interface:
             logger.info("零力矩模式已关闭")
             return True
 
-    def _zero_torque_gravity_loop(self, kd: float, dt: float):
+    def _zero_torque_gravity_loop(self, kd_list: list, dt: float):
         """零力矩 + 重力补偿后台循环"""
         kin = self._get_kinematics()
         while self._zero_torque_running and self._connected:
@@ -1104,7 +1112,7 @@ class ELA3Interface:
                 motor_torque = grav[i] * direction
 
                 self._driver.send_motion_control(
-                    mid, current_pos, 0.0, 0.0, kd, motor_torque,
+                    mid, current_pos, 0.0, 0.0, kd_list[i], motor_torque,
                 )
 
             time.sleep(dt)
