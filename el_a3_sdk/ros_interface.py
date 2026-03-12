@@ -246,17 +246,22 @@ class ELA3ROSInterface:
 
             # MoveIt service / action clients (optional)
             if MOVEIT_AVAILABLE:
-                ik_srv = "/compute_ik"
-                cp_srv = "/compute_cartesian_path"
-                mg_action = "/move_action"
-                if self._namespace:
-                    ik_srv = f"/{self._namespace}{ik_srv}"
-                    cp_srv = f"/{self._namespace}{cp_srv}"
-                    mg_action = f"/{self._namespace}{mg_action}"
+                ik_srv = _ns_prefix("/compute_ik")
+                cp_srv = _ns_prefix("/compute_cartesian_path")
+                mg_action = _ns_prefix("/move_action")
                 self._ik_client = self._node.create_client(GetPositionIK, ik_srv)
                 self._cartesian_path_client = self._node.create_client(GetCartesianPath, cp_srv)
                 self._move_group_client = ActionClient(
                     self._node, MoveGroup, mg_action)
+                logger.info(
+                    "MoveIt 客户端已创建: IK=%s, CartesianPath=%s, MoveGroup=%s",
+                    ik_srv, cp_srv, mg_action,
+                )
+            else:
+                logger.warning(
+                    "moveit_msgs 未安装，MoveIt 功能（PlanToJointGoal/EndPoseCtrl/"
+                    "CartesianPathCtrl 等）不可用"
+                )
 
             # TF2 listener (optional)
             if TF2_AVAILABLE:
@@ -342,14 +347,20 @@ class ELA3ROSInterface:
             logger.error("未连接，请先调用 ConnectPort()")
             return False
         controllers = [self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME]
-        return self._switch_controllers(activate=controllers, deactivate=[])
+        ok = self._switch_controllers(activate=controllers, deactivate=[])
+        if ok:
+            self._state = ArmState.ENABLED
+        return ok
 
     def DisableArm(self, motor_num: int = 7) -> bool:
         """失能机械臂（通过 controller_manager 停用控制器）"""
         if not self._connected:
             return False
         controllers = [self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME]
-        return self._switch_controllers(activate=[], deactivate=controllers)
+        ok = self._switch_controllers(activate=[], deactivate=controllers)
+        if ok:
+            self._state = ArmState.IDLE
+        return ok
 
     # ================================================================
     # 安全控制
@@ -361,6 +372,7 @@ class ELA3ROSInterface:
             return False
         controllers = [self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME]
         result = self._switch_controllers(activate=[], deactivate=controllers)
+        self._state = ArmState.IDLE
         logger.warning("急停已执行（ROS 模式）：控制器已停用")
         return result
 
@@ -445,6 +457,8 @@ class ELA3ROSInterface:
         if joint_7 is not None and self._gripper_traj_pub:
             self.GripperCtrl(gripper_angle=joint_7)
 
+        if self._state in (ArmState.ENABLED, ArmState.RUNNING):
+            self._state = ArmState.RUNNING
         return True
 
     def JointCtrlList(
@@ -529,20 +543,25 @@ class ELA3ROSInterface:
         if not self._connected:
             return False
 
+        ok = False
         if self._zero_torque_srv_client and self._zero_torque_srv_client.wait_for_service(timeout_sec=2.0):
-            return self._call_zero_torque_service(enable)
-
-        logger.warning("硬件零力矩服务不可用，回退到 switch_controller 方式")
-        if enable:
-            return self._switch_controllers(
-                activate=[self.ZERO_TORQUE_CONTROLLER_NAME],
-                deactivate=[self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME],
-            )
+            ok = self._call_zero_torque_service(enable)
         else:
-            return self._switch_controllers(
-                activate=[self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME],
-                deactivate=[self.ZERO_TORQUE_CONTROLLER_NAME],
-            )
+            logger.warning("硬件零力矩服务不可用，回退到 switch_controller 方式")
+            if enable:
+                ok = self._switch_controllers(
+                    activate=[self.ZERO_TORQUE_CONTROLLER_NAME],
+                    deactivate=[self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME],
+                )
+            else:
+                ok = self._switch_controllers(
+                    activate=[self.CONTROLLER_NAME, self.GRIPPER_CONTROLLER_NAME],
+                    deactivate=[self.ZERO_TORQUE_CONTROLLER_NAME],
+                )
+
+        if ok:
+            self._state = ArmState.ZERO_TORQUE if enable else ArmState.ENABLED
+        return ok
 
     def _call_zero_torque_service(self, enable: bool) -> bool:
         """调用硬件层 /rs_a3/set_zero_torque_mode (SetBool) 服务"""
@@ -887,6 +906,9 @@ class ELA3ROSInterface:
         if not MOVEIT_AVAILABLE or not self._ik_client:
             raise RuntimeError("MoveIt IK 服务不可用")
 
+        if not self._ik_client.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("/compute_ik 服务未就绪（等待 5s 超时），请确认 move_group 节点已启动")
+
         req = GetPositionIK.Request()
         req.ik_request.group_name = self._move_group_name
         req.ik_request.robot_state.is_diff = False
@@ -960,6 +982,12 @@ class ELA3ROSInterface:
         """异步 MoveGroup 规划 + 执行，完成后调用 result_callback(success: bool)"""
         if not MOVEIT_AVAILABLE or not self._move_group_client:
             logger.error("MoveGroup action 不可用")
+            if result_callback:
+                result_callback(False)
+            return
+
+        if not self._move_group_client.wait_for_server(timeout_sec=10.0):
+            logger.error("MoveGroup action server 未就绪（等待 10s 超时）")
             if result_callback:
                 result_callback(False)
             return
@@ -1392,6 +1420,15 @@ class ELA3ROSInterface:
             time.sleep(0.05)
         if future.done():
             return future.result()
+        if self._use_internal_executor and (
+            self._spin_thread is None or not self._spin_thread.is_alive()
+        ):
+            logger.error(
+                "Future 等待超时且内部 spin thread 已停止，"
+                "ROS 回调无法被处理。请检查连接状态。"
+            )
+        else:
+            logger.warning("Future 等待超时 (%.1fs)，服务端可能尚未就绪或处理缓慢", timeout)
         return None
 
     def _switch_controllers(self, activate: List[str], deactivate: List[str]) -> bool:
