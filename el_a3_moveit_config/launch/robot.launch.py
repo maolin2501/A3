@@ -207,6 +207,8 @@ def generate_launch_description():
         ],
     )
 
+    robot_description_kinematics = {"robot_description_kinematics": kinematics_yaml}
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -217,7 +219,7 @@ def generate_launch_description():
             robot_description,
             robot_description_semantic,
             robot_description_planning,
-            kinematics_yaml,
+            robot_description_kinematics,
         ],
         condition=IfCondition(use_rviz),
     )

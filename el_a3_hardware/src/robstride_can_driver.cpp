@@ -86,8 +86,8 @@ bool RobstrideCanDriver::init()
   tv.tv_usec = 100000;  // 100ms
   setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-  // Enlarge send buffer to reduce ENOBUFS under burst (6 frames/cycle @ 200Hz)
-  int sndbuf = 64 * 1024;
+  // Moderate send buffer to reduce ENOBUFS while limiting stale-command queuing
+  int sndbuf = 8 * 1024;
   setsockopt(socket_fd_, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
   // Only receive Type 2 feedback frames (comm_type=2 in bit28~24 of 29-bit extended ID)
@@ -126,8 +126,8 @@ bool RobstrideCanDriver::sendFrame(const can_frame& frame)
 {
   std::lock_guard<std::mutex> lock(send_mutex_);
   
-  constexpr int max_retries = 3;
-  constexpr int retry_delay_us = 100;
+  constexpr int max_retries = 2;
+  constexpr int retry_delay_us = 50;
   
   for (int retry = 0; retry <= max_retries; ++retry) {
     ssize_t nbytes = ::write(socket_fd_, &frame, sizeof(frame));
@@ -452,6 +452,7 @@ void RobstrideCanDriver::parseFeedback(const can_frame& frame, MotorType motor_t
   fb.fault_code = (can_id >> 16) & 0x3F;
   
   fb.is_valid = true;
+  fb.last_update = std::chrono::steady_clock::now();
 }
 
 MotorFeedback RobstrideCanDriver::getMotorFeedback(uint8_t motor_id)

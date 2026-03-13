@@ -3,8 +3,6 @@ Panels:
     Name: Displays
   - Class: rviz_common/Views
     Name: Views
-  - Class: moveit_rviz_plugin/MotionPlanning
-    Name: MotionPlanning
 Visualization Manager:
   Class: ""
   Displays:
@@ -56,7 +54,7 @@ Visualization Manager:
         Colliding Link Color: 255; 0; 0
         Goal State Alpha: 1.0
         Goal State Color: 250; 128; 0
-        Interactive Marker Size: 0.0
+        Interactive Marker Size: 0.6
         Joint Violation Color: 255; 0; 255
         Planning Group: arm
         Query Goal State: true
@@ -111,12 +109,12 @@ Visualization Manager:
       Visual Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: world
+    Fixed Frame: base_link
     Frame Rate: 30
   Name: root
   Tools:
     - Class: rviz_default_plugins/Interact
-      Hide Inactive Objects: true
+      Hide Inactive Objects: false
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
     - Class: rviz_default_plugins/FocusCamera

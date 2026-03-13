@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Literal
 
 import numpy as np
 
-from el_a3_sdk.can_driver import RobstrideCanDriver
+from el_a3_sdk.can_driver import RobstrideCanDriver, _busy_wait_us
 from el_a3_sdk.protocol import (
     MotorType, RunMode, ControlMode, MoveMode, ModeState, ArmState,
     MotorParams, ParamIndex, LogLevel,
@@ -388,7 +388,7 @@ class ELA3Interface:
             ):
                 success = False
 
-            time.sleep(0.00005)
+            _busy_wait_us(50)
 
         return success
 
@@ -480,7 +480,7 @@ class ELA3Interface:
                 self._driver.send_motion_control(
                     mid, current_pos, 0.0, 0.0, kd, motor_torque
                 )
-                time.sleep(0.00005)
+                _busy_wait_us(50)
 
             logger.warning("零力矩模式已启用 (Kd=%.3f)", kd)
         else:

@@ -8,6 +8,7 @@
 #ifndef EL_A3_HARDWARE__ROBSTRIDE_CAN_DRIVER_HPP_
 #define EL_A3_HARDWARE__ROBSTRIDE_CAN_DRIVER_HPP_
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -58,6 +59,7 @@ struct MotorFeedback
   uint8_t mode_state;   // 0: Reset, 1: Cali, 2: Motor
   uint8_t fault_code;
   bool is_valid;
+  std::chrono::steady_clock::time_point last_update;
 };
 
 /**

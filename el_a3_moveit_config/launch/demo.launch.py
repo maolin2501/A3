@@ -95,6 +95,7 @@ def generate_launch_description():
         "publish_geometry_updates": True,
         "publish_state_updates": True,
         "publish_transforms_updates": True,
+        "publish_planning_scene_hz": 4.0,
     }
 
     # ros2_control controllers config
@@ -131,6 +132,13 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
+    static_tf_node = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=["0", "0", "0", "0", "0", "0", "world", "base_link"],
+        output="log",
+    )
+
     # ros2_control node
     ros2_control_node = Node(
         package="controller_manager",
@@ -161,6 +169,8 @@ def generate_launch_description():
                     "--controller-manager-timeout", "30"],
     )
 
+    robot_description_kinematics = {"robot_description_kinematics": kinematics_yaml}
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -171,7 +181,7 @@ def generate_launch_description():
             robot_description,
             robot_description_semantic,
             robot_description_planning,
-            kinematics_yaml,
+            robot_description_kinematics,
         ],
         condition=IfCondition(use_rviz),
     )
@@ -186,6 +196,7 @@ def generate_launch_description():
     )
 
     nodes = [
+        static_tf_node,
         robot_state_publisher_node,
         ros2_control_node,
         delay_spawners,

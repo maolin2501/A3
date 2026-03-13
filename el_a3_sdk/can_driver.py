@@ -24,6 +24,14 @@ from el_a3_sdk.utils import float_to_uint16, uint16_to_float
 
 logger = logging.getLogger("el_a3_sdk.can_driver")
 
+
+def _busy_wait_us(us: int):
+    """微秒级忙等待（精度 ~1-5us，远优于 time.sleep 的 ~1ms）"""
+    target = time.perf_counter() + us * 1e-6
+    while time.perf_counter() < target:
+        pass
+
+
 # CAN 帧结构: can_id (4B) + dlc (1B) + padding (3B) + data (8B) = 16B
 CAN_FRAME_FMT = "=IB3x8s"
 CAN_FRAME_SIZE = 16
@@ -230,7 +238,7 @@ class RobstrideCanDriver:
         can_id = ((comm_type & 0x1F) << 24) | ((data_area2 & 0xFFFF) << 8) | (target_id & 0xFF)
         return can_id | CAN_EFF_FLAG
 
-    def _send_frame(self, can_id: int, data: bytes, retries: int = 5) -> bool:
+    def _send_frame(self, can_id: int, data: bytes, retries: int = 3) -> bool:
         """发送 CAN 帧，带重试"""
         if not self._socket:
             return False
@@ -242,7 +250,7 @@ class RobstrideCanDriver:
                     return True
                 except OSError as e:
                     if e.errno in (105, 11):  # ENOBUFS / EAGAIN
-                        time.sleep(0.001 * (attempt + 1))
+                        _busy_wait_us(200 * (attempt + 1))
                         continue
                     logger.error("发送 CAN 帧失败 [%s]: %s", self.can_name, e)
                     return False

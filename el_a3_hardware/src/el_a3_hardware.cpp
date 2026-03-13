@@ -759,6 +759,16 @@ hardware_interface::return_type RsA3HardwareInterface::read(
       auto feedback = can_driver_->getMotorFeedback(config.motor_id);
       
       if (feedback.is_valid) {
+        auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - feedback.last_update).count();
+        if (age_ms > 50) {
+          static int stale_warn = 0;
+          if (stale_warn++ % 200 == 0) {
+            RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
+              "电机 %d 反馈数据已过期 (%ld ms)，可能通信中断",
+              config.motor_id, age_ms);
+          }
+        }
         // Convert from motor coordinate frame to joint coordinate frame
         // motor_pos = joint_pos * direction + offset
         // joint_pos = (motor_pos - offset) / direction = (motor_pos - offset) * direction
@@ -805,6 +815,9 @@ hardware_interface::return_type RsA3HardwareInterface::read(
 hardware_interface::return_type RsA3HardwareInterface::write(
   const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
 {
+  // Thread-safety assumption: write() is called exclusively from ros2_control's
+  // single-threaded update loop. The static counters in this function are safe
+  // under this assumption. Convert to member variables if threading model changes.
   static int write_counter = 0;
   
   if (use_mock_hardware_) {
@@ -815,10 +828,18 @@ hardware_interface::return_type RsA3HardwareInterface::write(
     return hardware_interface::return_type::ERROR;
   }
 
-  // Get actual control period
+  // Get actual control period with tighter validation
   double dt = period.seconds();
   if (dt <= 0.0 || dt > 0.1) {
     dt = control_period_;  // Use default period
+  } else if (dt > control_period_ * 2.0) {
+    static int period_warn = 0;
+    if (period_warn++ % 200 == 0) {
+      RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
+        "控制周期 %.1f ms 超出 2 倍标称值 (%.1f ms)，限幅处理",
+        dt * 1000.0, control_period_ * 1000.0);
+    }
+    dt = control_period_ * 2.0;
   }
 
   auto write_t_start = std::chrono::steady_clock::now();
@@ -858,8 +879,21 @@ hardware_interface::return_type RsA3HardwareInterface::write(
   }
   
   // Send commands using motion control mode
+  struct timespec next_frame_ts;
+  clock_gettime(CLOCK_MONOTONIC, &next_frame_ts);
+  auto write_deadline = write_t_start + std::chrono::microseconds(4500);
+
   for (size_t i = 0; i < joint_configs_.size(); ++i) {
     const auto& config = joint_configs_[i];
+
+    if (std::chrono::steady_clock::now() > write_deadline) {
+      static int deadline_warn = 0;
+      if (deadline_warn++ % 200 == 0) {
+        RCLCPP_WARN(rclcpp::get_logger("RsA3HardwareInterface"),
+          "write() 接近 deadline，跳过关节 %zu 及之后", i);
+      }
+      break;
+    }
     
     // ============ Position command processing ============
     double new_position = hw_commands_positions_[i];
@@ -990,9 +1024,13 @@ hardware_interface::return_type RsA3HardwareInterface::write(
       }
     }
     
-    // Precise inter-frame delay via clock_nanosleep (much more accurate than usleep)
-    static const struct timespec frame_delay = {0, 50000};  // 50us
-    clock_nanosleep(CLOCK_MONOTONIC, 0, &frame_delay, nullptr);
+    // Absolute-time frame scheduling: constant 50us spacing regardless of sendMotionControl latency
+    next_frame_ts.tv_nsec += 50000;
+    if (next_frame_ts.tv_nsec >= 1000000000L) {
+      next_frame_ts.tv_sec++;
+      next_frame_ts.tv_nsec -= 1000000000L;
+    }
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_frame_ts, nullptr);
   }
 
   // === write() timing monitor ===
