@@ -199,9 +199,9 @@ class ELA3ROSInterface:
             self._node = Node(self._node_name, namespace=self._namespace)
 
             traj_qos = QoSProfile(
-                reliability=ReliabilityPolicy.BEST_EFFORT,
+                reliability=ReliabilityPolicy.RELIABLE,
                 history=HistoryPolicy.KEEP_LAST,
-                depth=1,
+                depth=5,
             )
             def _ns_prefix(topic: str) -> str:
                 return f"/{self._namespace}{topic}" if self._namespace else topic
@@ -268,6 +268,8 @@ class ELA3ROSInterface:
                 self._tf_buffer = TFBuffer()
                 self._tf_listener = TransformListener(self._tf_buffer, self._node)
 
+            self._connected = True
+
             if self._use_internal_executor:
                 self._executor = SingleThreadedExecutor()
                 self._executor.add_node(self._node)
@@ -277,8 +279,6 @@ class ELA3ROSInterface:
                 self._spin_thread.start()
             else:
                 logger.info("外部 executor 模式：跳过内部 spin thread")
-
-            self._connected = True
             self._state = ArmState.IDLE
             logger.info("ROS 接口已连接 (node=%s)", self._node_name)
             return True
