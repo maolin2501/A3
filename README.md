@@ -1,55 +1,14 @@
-# EL-A3 Robotic Arm ROS2 Control System
+# EL-A3 Robotic Arm
 
-> 7-DOF desktop robotic arm based on `ros2_control`, CAN bus Robstride motors, Pinocchio RNEA gravity compensation, dual-mode Python SDK, Xbox teleoperation, MoveIt2 planning, and multi-arm management.
-
----
-
-## Documentation / 文档
-
-| Language | File |
-|----------|------|
-| 中文 | [README_zh.md](README_zh.md) |
-| English | [README_en.md](README_en.md) |
+> 7-DOF 桌面机械臂项目，包含纯 Python SDK 和 ROS2 控制系统两个独立子项目。
 
 ---
 
-## Quick Start
+## 子项目
 
-```bash
-# Install dependencies
-cd scripts && sudo ./install_deps.sh
+| 项目 | 路径 | 说明 |
+|------|------|------|
+| **Python SDK** | [`el_a3_sdk/`](el_a3_sdk/) | 纯 Python SDK，Direct CAN 通信，多臂管理，Pinocchio 动力学 |
+| **ROS2 控制系统** | [`el_a3_ros/`](el_a3_ros/) | ros2_control 硬件接口，MoveIt2 运动规划，URDF 描述 |
 
-# Build workspace
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-
-# Setup CAN interface
-sudo ./scripts/setup_can.sh can0 1000000
-
-# Real hardware + Xbox teleop
-ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
-
-# Simulation (no hardware)
-ros2 launch el_a3_moveit_config demo.launch.py
-```
-
----
-
-## Packages
-
-| Package | Description |
-|---------|-------------|
-| `el_a3_hardware` | ros2_control hardware interface + CAN driver + ZeroTorqueController plugin |
-| `el_a3_description` | URDF (7 joints), controller config, launch files |
-| `el_a3_moveit_config` | MoveIt2 motion planning (arm + gripper groups) |
-| `el_a3_teleop` | Xbox Cartesian teleoperation + master-slave teleoperation |
-| `el_a3_sdk` | Python SDK -- Direct CAN + ROS Control dual-mode, ArmManager, Pinocchio dynamics |
-| `el_a3_web_ui` | Flask + SocketIO web control interface via SDK Bridge |
-
----
-
-## License
-
-Apache-2.0
+各子项目的详细文档请参阅对应目录下的 README.md。

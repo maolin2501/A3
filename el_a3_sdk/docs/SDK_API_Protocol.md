@@ -1,6 +1,6 @@
 # EL-A3 SDK API 协议说明
 
-> **版本**: 0.4.0 | **协议**: Robstride Private Protocol v1.0 | **日期**: 2026-03-05
+> **版本**: 1.0.0 | **协议**: Robstride Private Protocol v1.0 | **日期**: 2026-03-18
 
 ---
 
@@ -11,14 +11,13 @@
 - [3. 数据结构](#3-数据结构)
 - [4. 状态机与生命周期](#4-状态机与生命周期)
 - [5. API 参考 — ELA3Interface (CAN 直连)](#5-api-参考--ela3interface-can-直连)
-- [6. API 参考 — ELA3ROSInterface (ROS Control)](#6-api-参考--ela3rosinterface-ros-control)
-- [7. ArmManager 多臂管理](#7-armmanager-多臂管理)
-- [8. 运动学与动力学 (Pinocchio)](#8-运动学与动力学-pinocchio)
-- [9. 轨迹规划](#9-轨迹规划)
-- [10. CAN 帧协议](#10-can-帧协议)
-- [11. 关节配置与限位](#11-关节配置与限位)
-- [12. Web API 接口 (SDK Bridge)](#12-web-api-接口-sdk-bridge)
-- [13. 使用示例](#13-使用示例)
+- [6. ArmManager 多臂管理](#6-armmanager-多臂管理)
+- [7. 运动学与动力学 (Pinocchio)](#7-运动学与动力学-pinocchio)
+- [8. 轨迹规划](#8-轨迹规划)
+- [9. CAN 帧协议](#9-can-帧协议)
+- [10. 关节配置与限位](#10-关节配置与限位)
+- [11. Web API 接口 (SDK Bridge)](#11-web-api-接口-sdk-bridge)
+- [12. 使用示例](#12-使用示例)
 
 ---
 
@@ -26,23 +25,23 @@
 
 ### 1.1 SDK 定位
 
-`el_a3_sdk` 是 EL-A3 七自由度机械臂（6 臂关节 + L7 夹爪）的 Python 控制库，提供从底层电机通信到高层运动规划的完整 API。SDK 采用**双模式架构**，同一套 API 签名可在两种后端间无缝切换：
+`el_a3_sdk` 是 EL-A3 七自由度机械臂（6 臂关节 + L7 夹爪）的 Python 控制库，提供从底层电机通信到高层运动规划的完整 API。SDK 通过 SocketCAN 直接与 Robstride 电机通信，内置 200Hz 高频控制循环。
 
 | 模式 | 类 | 后端 | 适用场景 |
 |------|---|------|----------|
-| CAN 直连 | `ELA3Interface` | SocketCAN 帧 | 调试、标定、无 ROS 环境 |
-| ROS Control | `ELA3ROSInterface` | ROS2 Topics/Actions/Services | 正式控制、MoveIt 集成 |
+| CAN 直连 | `ELA3Interface` | SocketCAN 帧 | 调试、标定、独立控制 |
+
+> **注意**: ROS Control 集成请使用 `el_a3_hardware` 包（C++ ros2_control 插件），不在本 SDK 范围内。
 
 ### 1.2 模块结构
 
 ```
 el_a3_sdk/
-├── __init__.py          # 包入口 (v0.4.0)，延迟导入 ROS/Pinocchio
+├── __init__.py          # 包入口 (v1.0.0)，延迟导入 Pinocchio
 ├── protocol.py          # 协议枚举、电机参数、关节配置常量
 ├── data_types.py        # 数据结构（SI 单位: rad, Nm, m）
 ├── can_driver.py        # SocketCAN 底层驱动（帧收发 + 后台接收线程）
-├── interface.py         # ELA3Interface — CAN 直连 API
-├── ros_interface.py     # ELA3ROSInterface — ROS Control API
+├── interface.py         # ELA3Interface — CAN 直连 API + 200Hz 控制循环
 ├── arm_manager.py       # ArmManager — 单例多臂管理器
 ├── kinematics.py        # Pinocchio FK/IK/Jacobian/重力/动力学
 ├── trajectory.py        # S-curve 七段式 + 三次样条轨迹规划
@@ -332,11 +331,14 @@ ELA3Interface(
     joint_offsets: Optional[Dict[int, float]] = None,
     joint_limits: Optional[Dict[int, tuple]] = None,
     start_sdk_joint_limit: bool = True,
-    default_kp: float = 55.0,
-    default_kd: float = 4.5,
+    default_kp: float = 80.0,
+    default_kd: float = 4.0,
     urdf_path: Optional[str] = None,
     inertia_config_path: Optional[str] = None,
     logger_level: LogLevel = LogLevel.WARNING,
+    control_rate_hz: float = 200.0,
+    smoothing_alpha: float = 0.8,
+    gravity_feedforward_ratio: float = 1.0,
 )
 ```
 
@@ -345,15 +347,18 @@ ELA3Interface(
 | `can_name` | `"can0"` | CAN 接口名 |
 | `host_can_id` | `0xFD` (253) | 主机 CAN ID |
 | `motor_type_map` | 1-3=RS00, 4-7=EL05 | 电机 ID → 型号映射 |
-| `joint_directions` | 见 [11 关节配置](#11-关节配置与限位) | 关节方向（1.0 或 -1.0） |
+| `joint_directions` | 见 [10 关节配置](#10-关节配置与限位) | 关节方向（1.0 或 -1.0） |
 | `joint_offsets` | 全 0.0 | 关节偏移 (rad) |
-| `joint_limits` | 见 [11 关节配置](#11-关节配置与限位) | 关节限位 {id: (lower, upper)} |
+| `joint_limits` | 见 [10 关节配置](#10-关节配置与限位) | 关节限位 {id: (lower, upper)} |
 | `start_sdk_joint_limit` | `True` | 是否启用 SDK 软限位 |
-| `default_kp` | 55.0 | 默认位置增益（大臂 L1-L3，腕关节 L4-L6 独立配置为 30.0） |
-| `default_kd` | 4.5 | 默认速度增益（大臂 L1-L3，腕关节 L4-L6 独立配置为 2.0） |
+| `default_kp` | 80.0 | 默认位置增益 |
+| `default_kd` | 4.0 | 默认速度增益 |
 | `urdf_path` | 自动查找 | URDF 路径（Pinocchio 用） |
 | `inertia_config_path` | `None` | 标定惯量参数 YAML |
 | `logger_level` | `WARNING` | 日志级别 |
+| `control_rate_hz` | 200.0 | 后台控制循环频率 (Hz) |
+| `smoothing_alpha` | 0.8 | EMA 位置平滑系数 (0=保持, 1=直通) |
+| `gravity_feedforward_ratio` | 1.0 | 重力补偿前馈比例 (0~1) |
 
 ### 5.2 连接管理
 
@@ -368,11 +373,11 @@ ELA3Interface(
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `EnableArm` | `(motor_num=7, run_mode=MOTION_CONTROL, startup_kd=4.0) -> bool` | 使能电机（1-6 单个，7=全部）。按 disable→set_mode→enable→soft_start 流程执行 |
-| `DisableArm` | `(motor_num=7) -> bool` | 失能电机 |
+| `EnableArm` | `(motor_num=0xFF, run_mode=POSITION_PP, startup_kd=4.0) -> bool` | 使能电机（1-7 单个，0xFF=全部）。按 disable→set_mode→enable→设置 vel_max/acc_set 流程执行。默认 PP 模式，加速度 6 rad/s²，速度 3 rad/s |
+| `DisableArm` | `(motor_num=0xFF) -> bool` | 失能电机（1-7 单个，0xFF=全部） |
 | `EmergencyStop` | `() -> bool` | 立即失能所有电机并清故障，状态→IDLE |
 | `ResetArm` | `() -> bool` | 急停 + 重置内部状态机 |
-| `SetZeroPosition` | `(motor_num=7) -> bool` | 设置当前位置为零位 |
+| `SetZeroPosition` | `(motor_num=0xFF) -> bool` | 设置当前位置为零位（1-7 单个，0xFF=全部） |
 
 ### 5.4 模式控制
 
@@ -386,11 +391,11 @@ ModeCtrl(ctrl_mode=0x01, move_mode=0x00, move_spd_rate_ctrl=50) -> None
 | `move_mode` | 0x00=MOVE_J(运控), 0x01=CSP, 0x02=速度, 0x03=电流 |
 | `move_spd_rate_ctrl` | 运动速度百分比 (0-100) |
 
-内部映射: MOVE_J→MOTION_CONTROL, MOVE_CSP→POSITION_CSP, MOVE_VELOCITY→VELOCITY, MOVE_CURRENT→CURRENT。
+内部映射: MOVE_J→POSITION_PP, MOVE_CSP→POSITION_CSP, MOVE_VELOCITY→VELOCITY, MOVE_CURRENT→CURRENT。
 
 ### 5.5 运动控制
 
-#### JointCtrl — 关节角度控制（运控模式）
+#### JointCtrl — 关节角度控制（PP 位置模式）
 
 ```python
 JointCtrl(
@@ -402,12 +407,12 @@ JointCtrl(
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `joint_1` ~ `joint_6` | float | 目标关节角度 (rad)，关节坐标系 |
-| `kp` | Optional[float] | 位置增益（None=使用默认值 55.0） |
-| `kd` | Optional[float] | 速度增益（None=使用默认值 4.5） |
+| `kp` | Optional[float] | 位置增益（None=使用默认值 80.0） |
+| `kd` | Optional[float] | 速度增益（None=使用默认值 4.0） |
 | `velocity` | float | 速度前馈 (rad/s) |
 | `torque_ff` | Optional[List[float]] | 各关节前馈力矩 (Nm)，长度 6 |
 
-每次调用发送 6 帧运控指令（Type 1），帧间延迟 50μs。
+每次调用通过 Type 18 写入 loc_ref (0x7016) 设置目标位置，电机内部做梯形速度规划（PP 模式）。
 
 #### JointCtrlList — 列表形式关节控制
 
@@ -563,168 +568,15 @@ CAN 和 ROS 模式共用，依赖 Pinocchio，操作 6 个臂关节 (L1-L6)。
 
 ---
 
-## 6. API 参考 — ELA3ROSInterface (ROS Control)
-
-> 来源: `el_a3_sdk/ros_interface.py`
-
-适用于正式控制场景，通过 ROS2 Topic/Action/Service 与 `controller_manager` 交互。与 `ELA3Interface` 共享同名 API，但底层实现不同。
-
-### 6.1 构造函数
-
-```python
-ELA3ROSInterface(
-    node_name: str = "el_a3_sdk_node",
-    namespace: str = "",
-    controller_name: str = "arm_controller",
-    gripper_controller_name: str = "gripper_controller",
-    urdf_path: Optional[str] = None,
-    inertia_config_path: Optional[str] = None,
-    log_level: LogLevel = LogLevel.INFO,
-)
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `node_name` | `"el_a3_sdk_node"` | ROS2 节点名 |
-| `namespace` | `""` | ROS namespace（多臂隔离，如 `"arm1"`） |
-| `controller_name` | `"arm_controller"` | 臂控制器名 |
-| `gripper_controller_name` | `"gripper_controller"` | 夹爪控制器名 |
-
-### 6.2 双模式 API 差异对照
-
-| 功能 | CAN 模式 (ELA3Interface) | ROS 模式 (ELA3ROSInterface) |
-|------|--------------------------|------------------------------|
-| **通信** | SocketCAN 帧 | ROS2 Topics/Actions/Services |
-| **JointCtrl** | 逐电机 Type 1 运控帧 | `/{ns}/arm_controller/joint_trajectory` Topic |
-| **GripperCtrl** | 直接电机帧 | `/{ns}/gripper_controller/joint_trajectory` Topic |
-| **ZeroTorqueMode** | Kp=0 + 可选重力线程 | `switch_controller` 服务切换 zero_torque_controller |
-| **MoveJ** | 本地 S-curve 规划 | `FollowJointTrajectory` Action |
-| **MoveL** | IK 插值 + 本地执行 | `GetCartesianPath` + `FollowJointTrajectory` |
-| **EndPoseCtrl** | Pinocchio IK → MoveJ | MoveIt IK → MoveJ，回退 Pinocchio |
-| **CartesianVelocityCtrl** | Jacobian 伪逆 | 不支持 |
-| **PlanToJointGoal** | 不支持 | MoveIt `MoveGroup` Action（同步阻塞） |
-| **PlanToJointGoalAsync** | 不支持 | MoveIt `MoveGroup` Action（异步回调） |
-| **CartesianPathCtrl** | 不支持 | MoveIt `GetCartesianPath` + Action |
-| **ComputeIKAsync** | 不支持 | MoveIt `/compute_ik` Service (Future) |
-| **参数读写** | CAN Type 17/18 | 不可用（警告提示） |
-| **固件版本** | CAN Type 26 | 不可用 |
-| **末端位姿** | Pinocchio FK | TF2 查询，回退 FK |
-| **动力学** | Pinocchio (本地) | Pinocchio (本地，同 API) |
-
-### 6.3 ROS 模式独有方法 — MoveIt 集成
-
-#### PlanToJointGoal — 同步关节目标规划
-
-```python
-PlanToJointGoal(
-    joint_positions: List[float],  # 6-DOF, rad
-    velocity_scale: float = 0.3,
-    accel_scale: float = 0.3,
-    planning_time: float = 5.0,
-    num_attempts: int = 10,
-    replan: bool = True,
-    replan_attempts: int = 5,
-) -> bool
-```
-
-通过 MoveIt `MoveGroup` Action 同步规划并执行。阻塞直到完成。
-
-#### PlanToJointGoalAsync — 异步关节目标规划
-
-```python
-PlanToJointGoalAsync(
-    joint_positions: List[float],
-    result_callback: Callable[[bool], None],
-    velocity_scale: float = 0.3,
-    accel_scale: float = 0.3,
-    planning_time: float = 5.0,
-) -> None
-```
-
-异步版本，完成后通过 `result_callback(success: bool)` 回调。
-
-#### EndPoseCtrl — MoveIt IK 增强
-
-```python
-EndPoseCtrl(x, y, z, rx, ry, rz, duration=2.0, kp=None, kd=None) -> bool
-```
-
-ROS 模式下优先使用 MoveIt `/compute_ik` 服务求解，失败时回退到 Pinocchio IK。
-
-#### CartesianPathCtrl — 笛卡尔路径规划
-
-```python
-CartesianPathCtrl(
-    waypoints: List[ArmEndPose],
-    eef_step: float = 0.01,
-    duration: float = 5.0,
-) -> bool
-```
-
-通过 MoveIt `GetCartesianPath` + `FollowJointTrajectory` 执行。
-
-#### ComputeIKAsync — 异步 IK 求解
-
-```python
-ComputeIKAsync(
-    target_pose,             # geometry_msgs/Pose
-    seed_positions=None,
-    avoid_collisions=True,
-    timeout_ns=1_000_000_000,
-) -> rclpy.Future
-```
-
-返回 `rclpy.Future`，结果为 `GetPositionIK.Response`。
-
-#### PlanCartesianPathAsync — 异步笛卡尔路径
-
-```python
-PlanCartesianPathAsync(
-    waypoints: List[Pose],
-    max_step: float = 0.01,
-    avoid_collisions: bool = True,
-    result_callback: Callable[[bool], None] = None,
-) -> None
-```
-
-### 6.4 ROS2 接口映射
-
-**Topics (发布/订阅)**:
-
-| Topic | 类型 | 方向 | 说明 |
-|-------|------|------|------|
-| `/{ns}/joint_states` | `sensor_msgs/JointState` | Sub | 关节状态 @200Hz |
-| `/{ns}/arm_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | Pub | 臂关节轨迹指令 |
-| `/{ns}/gripper_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | Pub | 夹爪轨迹指令 |
-
-**Services**:
-
-| Service | 类型 | 说明 |
-|---------|------|------|
-| `/{ns}/controller_manager/switch_controller` | `SwitchController` | 控制器切换（位置↔零力矩） |
-| `/{ns}/compute_ik` | `GetPositionIK` | MoveIt IK 求解 |
-| `/{ns}/compute_cartesian_path` | `GetCartesianPath` | MoveIt 笛卡尔路径 |
-
-**Actions**:
-
-| Action | 类型 | 说明 |
-|--------|------|------|
-| `/{ns}/arm_controller/follow_joint_trajectory` | `FollowJointTrajectory` | 臂轨迹执行 |
-| `/{ns}/gripper_controller/follow_joint_trajectory` | `FollowJointTrajectory` | 夹爪轨迹执行 |
-| `/{ns}/move_action` | `MoveGroup` | MoveIt 运动规划 |
-| `/{ns}/execute_trajectory` | `ExecuteTrajectory` | MoveIt 轨迹执行 |
-
-`{ns}` 为 ROS namespace，单臂时为空，多臂时如 `arm1`、`arm2`。
-
 ---
 
-## 7. ArmManager 多臂管理
+## 6. ArmManager 多臂管理
 
 > 来源: `el_a3_sdk/arm_manager.py`
 
-Singleton 模式，统一管理不同 CAN/namespace 的机械臂实例。
+Singleton 模式，统一管理不同 CAN 接口的机械臂实例。
 
-### 7.1 基本用法
+### 6.1 基本用法
 
 ```python
 from el_a3_sdk import ArmManager
@@ -733,14 +585,10 @@ mgr = ArmManager()
 
 # 注册 CAN 直连臂
 master = mgr.register_can_arm("master", can_name="can0")
-
-# 注册 ROS 臂
-slave = mgr.register_ros_arm("slave", namespace="arm2",
-                              controller_name="arm2_arm_controller")
+slave = mgr.register_can_arm("slave", can_name="can1")
 
 # 获取
 arm = mgr.get_arm("master")   # 或 mgr["master"]
-arm = mgr["slave"]
 
 # 遍历
 for name in mgr.arm_names:
@@ -750,28 +598,26 @@ for name in mgr.arm_names:
 mgr.disconnect_all()
 ```
 
-### 7.2 API 参考
+### 6.2 API 参考
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `register_can_arm` | `(name, can_name="can0", **kwargs) -> ELA3Interface` | 注册 CAN 模式臂 |
-| `register_ros_arm` | `(name, namespace="", node_name=None, **kwargs) -> ELA3ROSInterface` | 注册 ROS 模式臂 |
-| `get_arm` | `(name) -> ELA3Interface/ELA3ROSInterface` | 按名获取（不存在抛 KeyError） |
+| `get_arm` | `(name) -> ELA3Interface` | 按名获取（不存在抛 KeyError） |
 | `has_arm` | `(name) -> bool` | 检查是否已注册 |
 | `unregister` | `(name) -> None` | 注销并断开 |
 | `disconnect_all` | `() -> None` | 断开所有臂 |
-| `from_config` | `(config_path, mode="ros", auto_connect=False) -> ArmManager` | 从 YAML 批量创建 |
+| `from_config` | `(config_path, auto_connect=False) -> ArmManager` | 从 YAML 批量创建 |
 | `reset` | `() -> None` | 销毁 Singleton（仅测试用） |
 | `arm_names` | 属性 `-> List[str]` | 已注册臂名列表 |
 
 支持 `name in mgr`、`mgr[name]`、`len(mgr)` 操作。
 
-### 7.3 从配置文件批量创建
+### 6.3 从配置文件批量创建
 
 ```python
 mgr = ArmManager.from_config(
-    "el_a3_description/config/multi_arm_config.yaml",
-    mode="ros",           # "ros" 或 "can"
+    "config/multi_arm_config.yaml",
     auto_connect=True,
 )
 ```
@@ -784,23 +630,21 @@ arms:
     enabled: true
     can_interface: can0
     host_can_id: 253
-    prefix: arm1_
   arm2:
     enabled: true
     can_interface: can1
     host_can_id: 253
-    prefix: arm2_
 ```
 
 ---
 
-## 8. 运动学与动力学 (Pinocchio)
+## 7. 运动学与动力学 (Pinocchio)
 
 > 来源: `el_a3_sdk/kinematics.py`
 
 基于 Pinocchio 库，独立于 ROS，CAN 和 ROS 模式共用。操作 6 个臂关节 (L1-L6)，L7 夹爪不参与运动链。
 
-### 8.1 构造函数
+### 7.1 构造函数
 
 ```python
 ELA3Kinematics(
@@ -811,7 +655,7 @@ ELA3Kinematics(
 )
 ```
 
-### 8.2 API 参考
+### 7.2 API 参考
 
 | 方法 | 签名 | 返回 | 说明 |
 |------|------|------|------|
@@ -827,7 +671,7 @@ ELA3Kinematics(
 
 **属性**: `model`, `data`, `nq`, `nv`
 
-### 8.3 惯量标定
+### 7.3 惯量标定
 
 通过 `inertia_config_path` 加载 YAML 标定参数，覆盖 URDF 中 L2-L6 的质量和质心：
 
@@ -844,11 +688,11 @@ inertia_params:
 
 ---
 
-## 9. 轨迹规划
+## 8. 轨迹规划
 
 > 来源: `el_a3_sdk/trajectory.py`。无 ROS 依赖。
 
-### 9.1 TrajectoryPoint
+### 8.1 TrajectoryPoint
 
 ```python
 @dataclass
@@ -859,7 +703,7 @@ class TrajectoryPoint:
     accelerations: List[float]     # 关节加速度 (rad/s²)
 ```
 
-### 9.2 SCurvePlanner — 单关节 S-curve
+### 8.2 SCurvePlanner — 单关节 S-curve
 
 标准七段式 S-curve 速度剖面规划。
 
@@ -878,7 +722,7 @@ points = planner.generate_trajectory(profile, dt=0.005)
 
 **SCurveProfile 七段**: t1(加加速) → t2(匀加速) → t3(减加速) → t4(匀速) → t5(加减速) → t6(匀减速) → t7(减减速)
 
-### 9.3 MultiJointPlanner — 多关节同步
+### 8.3 MultiJointPlanner — 多关节同步
 
 所有关节在相同时间内完成运动，自动缩放速度/加速度以保持比例协调。
 
@@ -893,7 +737,7 @@ traj = mp.generate_trajectory(profiles, dt=0.005)
 | `plan_sync` | `(starts, ends, v_max=None, a_max=None) -> List[SCurveProfile]` | 同步规划 |
 | `generate_trajectory` | `(profiles, dt=0.005) -> List[TrajectoryPoint]` | 合并为多关节轨迹 |
 
-### 9.4 CubicSplinePlanner — 三次样条
+### 8.4 CubicSplinePlanner — 三次样条
 
 多路点 Hermite 三次样条插值。
 
@@ -908,11 +752,11 @@ traj = CubicSplinePlanner.plan_waypoints(waypoints, durations=[2.0, 2.0], dt=0.0
 
 ---
 
-## 10. CAN 帧协议
+## 9. CAN 帧协议
 
 > 详细协议参考 [`电机通信协议汇总.md`](../../电机通信协议汇总.md)
 
-### 10.1 29 位扩展帧 ID 编码
+### 9.1 29 位扩展帧 ID 编码
 
 ```
 Bit 28~24: 通信类型 (CommType, 5 bits)
@@ -922,7 +766,7 @@ Bit  7~0:  目标地址 (8 bits) — 电机 CAN ID
 
 默认主机 CAN ID: `0xFD` (253)。电机 CAN ID: 1~7。
 
-### 10.2 运控模式帧 (Type 1)
+### 9.2 运控模式帧 (Type 1)
 
 发送运控指令，电机执行 PD + 前馈力矩控制:
 
@@ -943,7 +787,7 @@ Bit  7~0:  目标地址 (8 bits) — 电机 CAN ID
 
 **帧 ID 数据区 2**: τ_ff (uint16) → T_MIN~T_MAX (电机型号相关)
 
-### 10.3 反馈帧 (Type 2)
+### 9.3 反馈帧 (Type 2)
 
 电机反馈帧，每次收到 Type 1/3/4/6 后自动回复。
 
@@ -964,7 +808,7 @@ Bit  7~0:  目标地址 (8 bits) — 电机 CAN ID
 | Bit 16~21 | 故障码 (6 bits) |
 | Bit 8~15 | 电机 CAN ID |
 
-### 10.4 参数读写帧 (Type 17/18)
+### 9.4 参数读写帧 (Type 17/18)
 
 **读取请求 (Type 17)**:
 
@@ -981,7 +825,7 @@ Bit  7~0:  目标地址 (8 bits) — 电机 CAN ID
 | Byte 2-3 | 保留 (0) |
 | Byte 4-7 | 参数值 (IEEE-754 float, 小端序) |
 
-### 10.5 uint16 线性映射公式
+### 9.5 uint16 线性映射公式
 
 ```python
 # 编码 (发送)
@@ -1001,7 +845,7 @@ def uint16_to_float(x_int, x_min, x_max):
     return x_int * (x_max - x_min) / 65535.0 + x_min
 ```
 
-### 10.6 各型号映射范围汇总
+### 9.6 各型号映射范围汇总
 
 | 电机 | P_MIN/MAX (rad) | V_MIN/MAX (rad/s) | T_MIN/MAX (Nm) | KP_MAX | KD_MAX |
 |------|-----------------|--------------------|--------------------|--------|--------|
@@ -1011,9 +855,9 @@ def uint16_to_float(x_int, x_min, x_max):
 
 ---
 
-## 11. 关节配置与限位
+## 10. 关节配置与限位
 
-### 11.1 默认关节映射
+### 10.1 默认关节映射
 
 L4-L7 默认使用 EL05，可通过 `motor_type_map` 参数或 `wrist_motor_type` 切换为 RS05。
 
@@ -1027,7 +871,7 @@ L4-L7 默认使用 EL05，可通过 `motor_type_map` 参数或 `wrist_motor_type
 | L6 | 6 | EL05 | +1 | 0.0 | -1.5708 | +1.5708 | ±90° |
 | L7 (夹爪) | 7 | EL05 | +1 | 0.0 | -1.5708 | +1.5708 | ±90° |
 
-### 11.2 关节方向说明
+### 10.2 关节方向说明
 
 `direction` 系数用于关节坐标系与电机坐标系之间的转换：
 
@@ -1036,7 +880,7 @@ motor_position = joint_position × direction + offset
 joint_position = (motor_position - offset) × direction
 ```
 
-### 11.3 EL05 vs RS05 参数差异
+### 10.3 EL05 vs RS05 参数差异
 
 | 参数 | EL05 | RS05 |
 |------|------|------|
@@ -1046,19 +890,19 @@ joint_position = (motor_position - offset) × direction
 | 最大电流 | 10 Apk | 11 Apk |
 | 力矩映射范围 | ±6 Nm | ±5.5 Nm |
 
-### 11.4 软限位保护
+### 10.4 软限位保护
 
 SDK 默认启用软限位保护（`start_sdk_joint_limit=True`）。所有运动指令发送前自动 clamp 到限位范围内。可通过 `SetJointLimitEnabled(False)` 关闭。
 
 ---
 
-## 12. Web API 接口 (SDK Bridge)
+## 11. Web API 接口 (SDK Bridge)
 
-> 来源: `ros2_ws/src/el_a3_web_ui/el_a3_web_ui/sdk_bridge.py`
+> 注: Web UI SDK Bridge 已移至独立的 ROS 项目中 (已移除)
 
 `SDKBridge` 通过 `ArmManager` + `ELA3ROSInterface` 桥接 Web 前端与 SDK。
 
-### 12.1 REST API 端点
+### 11.1 REST API 端点
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -1074,7 +918,7 @@ SDK 默认启用软限位保护（`start_sdk_joint_limit=True`）。所有运动
 | `/api/sdk_info` | GET | SDK 版本、臂状态、协议 |
 | `/api/dynamics` | GET | 重力力矩、动力学数据 |
 
-### 12.2 WebSocket 命令 (Client → Server)
+### 11.2 WebSocket 命令 (Client → Server)
 
 通过 Socket.IO `emit('command', {...})` 发送。
 
@@ -1095,7 +939,7 @@ SDK 默认启用软限位保护（`start_sdk_joint_limit=True`）。所有运动
 | `stop_teleop` | — | 停止 Xbox 遥操作子进程 |
 | `set_can_interface` | `interface` | 设置 CAN 接口 |
 
-### 12.3 WebSocket 事件 (Server → Client)
+### 11.3 WebSocket 事件 (Server → Client)
 
 | 事件 | 负载 | 说明 |
 |------|------|------|
@@ -1106,9 +950,9 @@ SDK 默认启用软限位保护（`start_sdk_joint_limit=True`）。所有运动
 
 ---
 
-## 13. 使用示例
+## 12. 使用示例
 
-### 13.1 CAN 模式快速上手
+### 12.1 CAN 模式快速上手
 
 ```python
 from el_a3_sdk import ELA3Interface
@@ -1134,47 +978,16 @@ arm.DisableArm()
 arm.DisconnectPort()
 ```
 
-### 13.2 ROS 模式 + MoveIt
-
-```python
-from el_a3_sdk import ArmManager
-
-mgr = ArmManager()
-arm = mgr.register_ros_arm("main", namespace="", controller_name="arm_controller")
-arm.ConnectPort()
-arm.EnableArm()
-
-# MoveIt 关节目标规划（同步）
-arm.PlanToJointGoal([0.0, 1.0, -0.5, 0.0, 0.0, 0.0], velocity_scale=0.3)
-
-# 笛卡尔位姿控制
-arm.EndPoseCtrl(0.3, 0.0, 0.3, 0.0, 0.0, 0.0, duration=3.0)
-
-# 异步规划
-arm.PlanToJointGoalAsync(
-    [0.5, 0.5, -0.5, 0.0, 0.0, 0.0],
-    result_callback=lambda ok: print(f"完成: {ok}"),
-)
-
-# 夹爪
-arm.GripperCtrl(gripper_angle=0.3)
-
-arm.DisableArm()
-arm.DisconnectPort()
-```
-
-### 13.3 多臂管理
+### 12.2 多臂管理
 
 ```python
 from el_a3_sdk import ArmManager
 
 mgr = ArmManager()
 
-# 注册双臂
-master = mgr.register_ros_arm("master", namespace="arm1",
-    controller_name="arm1_arm_controller")
-slave = mgr.register_ros_arm("slave", namespace="arm2",
-    controller_name="arm2_arm_controller")
+# 注册双臂（不同 CAN 接口）
+master = mgr.register_can_arm("master", can_name="can0")
+slave = mgr.register_can_arm("slave", can_name="can1")
 
 master.ConnectPort()
 slave.ConnectPort()
@@ -1192,7 +1005,7 @@ while True:
     time.sleep(0.02)
 ```
 
-### 13.4 零力矩拖动示教
+### 12.3 零力矩拖动示教
 
 ```python
 from el_a3_sdk import ELA3Interface
@@ -1220,7 +1033,7 @@ arm.DisableArm()
 arm.DisconnectPort()
 ```
 
-### 13.5 RS05 电机配置
+### 12.4 RS05 电机配置
 
 ```python
 from el_a3_sdk import ELA3Interface, MotorType
@@ -1234,7 +1047,7 @@ arm = ELA3Interface(
 )
 ```
 
-### 13.6 动力学计算
+### 12.5 动力学计算
 
 ```python
 from el_a3_sdk import ELA3Interface
@@ -1266,8 +1079,8 @@ print(f"gravity: {info.gravity_torques}")
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 0.4.0 | 2026-03 | 双模式 SDK（CAN + ROS）、ArmManager、MoveIt 集成、Pinocchio 动力学 |
-| 0.4.1 | 2026-03-05 | 控制参数调优：Kp 80→55, Kd 4→4.5；腕关节独立 PD (Kp=30, Kd=2)；重力补偿 50%→85%；速度前馈滤波优化 |
+| 0.4.0 | 2026-03 | 纯 CAN SDK、ArmManager、Pinocchio 动力学、200Hz 控制循环 |
+| 1.0.0 | 2026-03-18 | 修复 ArmStatus 越界、速度编码范围、线程安全；逐关节 PD；SLERP 姿态插值；Context Manager；MoveWaypoints；SaveParameters |
 
 ---
 

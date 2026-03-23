@@ -2,17 +2,15 @@
 """
 10 路径点循环测试 -- 实机版
 
-使用 ELA3Interface (Direct CAN) 驱动真实电机，
-内置 ROS2 /joint_states 发布器供 RViz 实时显示。
+使用 ELA3Interface (Direct CAN) 驱动真实电机。
 
 前置条件:
   1. CAN 接口已激活: bash scripts/setup_can.sh can0 1000000
   2. 机械臂已上电
   3. 机械臂周围无障碍物
-  4. (可选) 启动 RViz: ros2 launch el_a3_description comm_test.launch.py
 
 用法:
-  python3 el_a3_sdk/demo/waypoint_loop_real.py --can can0 [--loops 3]
+  python3 demo/waypoint_loop_real.py --can can0 [--loops 3]
 """
 
 import sys
@@ -21,14 +19,11 @@ import argparse
 import time
 import math
 import signal
-import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from el_a3_sdk import ELA3Interface, MotorType, LogLevel
-from el_a3_sdk.demo.waypoints_config import WAYPOINTS, get_waypoint_summary
-
-JOINT_NAMES = [f"L{i}_joint" for i in range(1, 8)]
+from waypoints_config import WAYPOINTS, get_waypoint_summary
 
 
 def build_motor_type_map(wrist_type_str: str) -> dict:
@@ -37,60 +32,6 @@ def build_motor_type_map(wrist_type_str: str) -> dict:
         1: MotorType.RS00, 2: MotorType.RS00, 3: MotorType.RS00,
         4: wrist, 5: wrist, 6: wrist, 7: wrist,
     }
-
-
-class JointStatePublisher:
-    """后台 ROS2 /joint_states 发布器（读取 ELA3Interface 反馈）"""
-
-    def __init__(self, arm: ELA3Interface, rate_hz: float = 50.0):
-        self._arm = arm
-        self._rate_hz = rate_hz
-        self._node = None
-        self._pub = None
-        self._timer = None
-        self._running = False
-        self._JointState = None
-
-    def start(self) -> bool:
-        try:
-            import rclpy
-            from sensor_msgs.msg import JointState
-        except ImportError:
-            print("[WARN] rclpy 未安装，跳过 ROS2 /joint_states 发布（RViz 不可用）")
-            return False
-
-        rclpy.init()
-        self._node = rclpy.create_node('waypoint_loop_joint_pub')
-        self._JointState = JointState
-        self._pub = self._node.create_publisher(JointState, '/joint_states', 10)
-        self._timer = self._node.create_timer(1.0 / self._rate_hz, self._publish)
-        self._running = True
-
-        threading.Thread(
-            target=lambda: rclpy.spin(self._node),
-            daemon=True, name="ros_spin"
-        ).start()
-        print(f"[OK] ROS2 /joint_states 发布器已启动 ({self._rate_hz}Hz)")
-        return True
-
-    def _publish(self):
-        if not self._running:
-            return
-        js = self._arm.GetArmJointMsgs()
-        msg = self._JointState()
-        msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.name = list(JOINT_NAMES)
-        msg.position = js.to_list(include_gripper=True)
-        msg.velocity = self._arm.GetArmJointVelocities().to_list(include_gripper=True)
-        msg.effort = self._arm.GetArmJointEfforts().to_list(include_gripper=True)
-        self._pub.publish(msg)
-
-    def stop(self):
-        self._running = False
-        if self._node:
-            import rclpy
-            self._node.destroy_node()
-            rclpy.try_shutdown()
 
 
 def print_motor_status(arm: ELA3Interface):
@@ -120,8 +61,6 @@ def main():
                         help="循环次数，0=无限循环 (默认: 0)")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="速度倍率，影响等待时间 (默认: 1.0)")
-    parser.add_argument("--no-ros", action="store_true",
-                        help="禁用 ROS2 /joint_states 发布")
     args = parser.parse_args()
 
     motor_map = build_motor_type_map(args.motor_type)
@@ -144,18 +83,11 @@ def main():
         logger_level=LogLevel.INFO,
     )
 
-    js_pub = None
-    if not args.no_ros:
-        js_pub = JointStatePublisher(arm, rate_hz=50.0)
-
     if not arm.ConnectPort():
         print(f"[ERROR] CAN 接口 {args.can} 连接失败")
         return
 
     print(f"[OK] CAN 接口 {args.can} 已连接")
-
-    if js_pub:
-        js_pub.start()
 
     time.sleep(0.3)
 
@@ -232,8 +164,6 @@ def main():
         print("[INFO] 失能电机...")
         arm.DisableArm()
         arm.DisconnectPort()
-        if js_pub:
-            js_pub.stop()
         print("[OK] 实机测试结束")
 
 

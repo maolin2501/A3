@@ -18,7 +18,7 @@ import os
 import time
 import math
 import sys
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, _PROJECT_ROOT)
 
 from el_a3_sdk import ELA3Interface, LogLevel
@@ -30,7 +30,7 @@ def main():
     arm = ELA3Interface(
         can_name="can0",
         logger_level=LogLevel.INFO,
-        inertia_config_path=os.path.join(_PROJECT_ROOT, 'el_a3_description', 'config', 'inertia_params.yaml'),
+        inertia_config_path=os.path.join(_PROJECT_ROOT, 'resources', 'config', 'inertia_params.yaml'),
     )
 
     if not arm.ConnectPort():

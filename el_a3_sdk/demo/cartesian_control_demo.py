@@ -9,7 +9,7 @@
 import os
 import time
 import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from el_a3_sdk import ELA3Interface, ArmEndPose
 
