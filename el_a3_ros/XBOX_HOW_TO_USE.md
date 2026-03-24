@@ -1,199 +1,120 @@
-# Xbox手柄控制 - 实机使用说明
+# Xbox 手柄控制 — 使用说明
 
-## ✅ 系统状态
+## 系统组件
 
-系统已经成功启动！以下组件正在运行：
+启动后会运行以下节点：
 
-- ✅ **robot_state_publisher**: 机器人模型发布
-- ✅ **ros2_control_node**: 硬件控制管理（连接CAN总线）
-- ✅ **move_group**: MoveIt运动规划
-- ✅ **rviz2**: 3D可视化界面
-- ✅ **joy_node**: 手柄驱动
-- ✅ **xbox_teleop_node**: 手柄控制节点
+- **ros2_control_node** — 硬件控制管理（CAN 总线通信）
+- **robot_state_publisher** — 机器人 URDF 模型发布
+- **joint_state_broadcaster** — 关节状态广播
+- **arm_controller** — L1-L6 关节轨迹控制器
+- **gripper_controller** — L7 夹爪控制器
+- **joy_node** — 手柄驱动（读取 `/dev/input/js*`）
+- **xbox_teleop_node** — 手柄映射 + Jacobian IK 控制
 
-## 🚀 启动初始化流程
+## 启动
 
-程序启动时会自动执行以下步骤：
-1. **读取电机位置** - 等待关节状态，确保读取到所有电机的当前位置
-2. **显示当前位置** - 打印各关节的初始位置（弧度）
-3. **规划回Home** - 自动规划并执行运动到Home位置
-4. **Home位置定义**: L1=0°, L2=45°, L3=-45°, L4=0°, L5=0°, L6=0°
+### 实机控制
 
-## 🎮 如何使用
-
-### 1. 检查RViz窗口
-
-RViz应该已经打开，显示机械臂模型。如果没有看到：
-- 检查屏幕上是否有RViz窗口
-- 机器人应该显示在3D视图中
-
-### 2. 连接Xbox手柄
-
-**有线连接**：
 ```bash
-# 在新终端中检查手柄是否连接
-ls /dev/input/js0
-```
+# 配置 CAN 接口
+sudo bash scripts/setup_can.sh can0 1000000
 
-如果没有`/dev/input/js0`设备：
-1. 插入Xbox手柄USB线
-2. 或使用Xbox无线适配器
-3. 再次检查：`ls /dev/input/js0`
-
-### 3. 测试手柄输入
-
-打开新终端：
-```bash
-cd ./ros2_ws
+# 启动
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-
-# 查看手柄输入
-ros2 topic echo /joy
+ros2 launch el_a3_teleop real_xbox_teleop.launch.py can_interface:=can0
 ```
 
-移动摇杆和按下按钮，应该能看到数值变化。
+### 仿真模式（无硬件）
 
-### 4. 控制机械臂
-
-一旦手柄连接并工作：
-
-#### 平移控制（移动位置）
-- **左摇杆 左右** → 机器人左右移动 (X轴)
-- **左摇杆 上下** → 机器人前后移动 (Y轴)
-- **LT扳机** → 机器人向下移动 (Z轴)
-- **RT扳机** → 机器人向上移动 (Z轴)
-
-#### 旋转控制（改变姿态）
-- **右摇杆 左右** → 绕Z轴旋转 (Yaw)
-- **右摇杆 上下** → 绕Y轴旋转 (Pitch)
-- **LB肩键** → 绕X轴逆时针旋转 (Roll)
-- **RB肩键** → 绕X轴顺时针旋转 (Roll)
-
-### 5. 观察机器人运动
-
-- 在RViz中观察机器人运动
-- 橙色/蓝色的交互标记显示目标位置
-- 机器人会规划路径并移动到目标位置
-
-## ⚙️ 当前配置
-
-控制参数（位于`./ros2_ws/src/el_a3_teleop/config/xbox_teleop.yaml`）：
-
-- **更新频率**: 20 Hz
-- **平移速度**: 0.001 m/更新 (慢速，适合初学)
-- **旋转速度**: 0.01 rad/更新
-- **摇杆死区**: 0.1
-
-## 🔧 如果没有手柄怎么办？
-
-系统已经在仿真模式下运行。即使没有Xbox手柄，你也可以：
-
-1. **使用RViz交互控制**：
-   - 在RViz的MotionPlanning面板中
-   - 拖动交互标记来移动机器人
-   - 点击"Plan & Execute"执行运动
-
-2. **使用MoveIt界面**：
-   - 设置目标位姿
-   - 规划轨迹
-   - 执行运动
-
-## 📊 监控系统
-
-### 查看目标位姿
 ```bash
-# 新终端
-cd ./ros2_ws
-source install/setup.bash
-ros2 topic echo /target_pose
+ros2 launch el_a3_teleop real_xbox_teleop.launch.py use_mock_hardware:=true
 ```
 
-### 查看关节状态
+### 带 RViz 可视化
+
 ```bash
+ros2 launch el_a3_teleop real_xbox_teleop.launch.py can_interface:=can0 use_rviz:=true
+```
+
+## 初始化流程
+
+程序启动时自动执行：
+1. 等待关节状态数据，确认所有电机在线
+2. 读取并显示各关节初始位置
+3. 规划并执行回 Home 位置：L1=0, L2=45, L3=-45, L4=0, L5=0, L6=0 (度)
+
+## 操控方式
+
+### 平移控制（末端位移）
+
+| 输入 | 轴 | 说明 |
+|------|----|------|
+| 左摇杆 左右 | X | 左右平移 |
+| 左摇杆 上下 | Y | 前后平移 |
+| LT 扳机 | -Z | 向下 |
+| RT 扳机 | +Z | 向上 |
+
+### 旋转控制（末端姿态）
+
+| 输入 | 轴 | 说明 |
+|------|----|------|
+| 右摇杆 左右 | Yaw | 绕 Z 轴偏航 |
+| 右摇杆 上下 | Pitch | 绕 Y 轴俯仰 |
+| LB 肩键 | -Roll | 绕 X 轴逆时针 |
+| RB 肩键 | +Roll | 绕 X 轴顺时针 |
+
+### 功能键
+
+| 按键 | 功能 |
+|------|------|
+| A | 切换速度档位（5 档循环） |
+| B | 回 Home 位置 |
+
+## 当前配置参数
+
+配置文件：`el_a3_teleop/config/xbox_teleop.yaml`
+
+| 参数 | 值 | 说明 |
+|------|----|------|
+| `update_rate` | 50.0 Hz | 控制频率 |
+| `max_linear_velocity` | 0.15 m/s | 最大平移速度 |
+| `max_angular_velocity` | 1.5 rad/s | 最大旋转速度 |
+| `deadzone` | 0.15 | 摇杆死区 |
+| `input_smoothing` | 0.35 | EMA 平滑系数 |
+| `trajectory_time_from_start` | 0.08 s | 轨迹时间步长 |
+
+## 无手柄时的替代操作
+
+如果没有 Xbox 手柄，可以通过 MoveIt 界面控制：
+
+```bash
+# 启动 MoveIt demo（仿真）
+ros2 launch el_a3_moveit_config demo.launch.py
+
+# 或启动真实硬件 + MoveIt
+ros2 launch el_a3_moveit_config robot.launch.py can_interface:=can0
+```
+
+在 RViz 的 MotionPlanning 面板中拖动交互标记，使用 "Plan & Execute" 执行运动。
+
+## 监控
+
+```bash
+# 查看关节状态
 ros2 topic echo /joint_states
-```
 
-### 查看可用话题
-```bash
+# 查看手柄原始输入
+ros2 topic echo /joy
+
+# 查看所有 topic
 ros2 topic list
+
+# 查看控制器状态
+ros2 control list_controllers
 ```
 
-## ⚠️ 注意事项
+## 停止系统
 
-### 当前是仿真模式
-- ✅ 可以安全测试
-- ✅ 没有真实硬件风险
-- ✅ 可以尝试各种运动
-
-### 控制特点
-- 📝 使用MoveGroup规划器（不是实时Servo）
-- 📝 每次输入会规划并执行完整轨迹
-- 📝 有轻微延迟是正常的
-- 📝 适合精确定位，不适合连续快速运动
-
-### 如果要更流畅的控制
-需要安装MoveIt Servo：
-```bash
-sudo apt install ros-humble-moveit-servo
-```
-
-然后使用：
-```bash
-ros2 launch el_a3_teleop complete_teleop.launch.py
-```
-
-## 🛑 停止系统
-
-在运行launch的终端中按 `Ctrl+C`
-
-## 📚 更多信息
-
-- 快速入门指南: `./ros2_ws/src/el_a3_teleop/QUICK_START.md`
-- 完整使用指南: `./ros2_ws/src/el_a3_teleop/USAGE_GUIDE.md`
-- 安装指南: `./XBOX_CONTROL_SETUP.md`
-
-## 🎯 快速测试步骤
-
-1. ✅ **RViz已打开** - 你应该能看到机器人模型
-2. 📱 **连接Xbox手柄** - 插入USB或使用无线适配器
-3. 🎮 **测试输入** - `ros2 topic echo /joy`
-4. 🤖 **移动摇杆** - 观察RViz中的机器人运动
-5. 🎉 **开始控制** - 享受！
-
----
-
-## 🔧 启动命令
-
-### 实机控制（连接真实机械臂）
-```bash
-# 1. 重新加载CAN驱动并配置
-sudo modprobe -r gs_usb && sleep 1 && sudo modprobe gs_usb && sleep 2
-sudo ip link set can0 txqueuelen 1000
-sudo ip link set can0 type can bitrate 1000000
-sudo ip link set can0 up
-
-# 2. 启动控制系统
-cd ./ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-source ./install/setup.bash
-ros2 launch el_a3_teleop real_teleop.launch.py can_interface:=can0
-```
-
-### 仿真控制（无硬件）
-```bash
-ros2 launch el_a3_teleop simple_teleop.launch.py
-```
-
-### 速度控制
-
-- **A键**: 切换速度档位（5档：超慢/慢速/中速/快速/极速）
-- **B键**: 回到Home位置
-
-祝使用愉快！🚀
-
-
-
-
-
+在启动 launch 的终端中按 `Ctrl+C`。

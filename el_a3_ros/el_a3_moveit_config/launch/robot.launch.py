@@ -50,8 +50,8 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "wrist_motor_type",
-            default_value="RS05",
-            description="Wrist motor type: RS05 or EL05",
+            default_value="EL05",
+            description="Wrist motor type: EL05 or RS05",
         )
     )
 
@@ -133,6 +133,15 @@ def generate_launch_description():
         [FindPackageShare("el_a3_description"), "config", "el_a3_controllers.yaml"]
     )
 
+    # Resolve zero_torque_controller paths dynamically (avoid hardcoded absolute paths)
+    desc_share = get_package_share_directory("el_a3_description")
+    zero_torque_path_overrides = {
+        "zero_torque_controller.ros__parameters.urdf_path":
+            os.path.join(desc_share, "urdf", "el_a3.urdf"),
+        "zero_torque_controller.ros__parameters.inertia_config_path":
+            os.path.join(desc_share, "config", "inertia_params.yaml"),
+    }
+
     # RViz config
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare("el_a3_moveit_config"), "config", "moveit.rviz"]
@@ -142,7 +151,7 @@ def generate_launch_description():
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=[robot_description, ros2_controllers_yaml],
+        parameters=[robot_description, ros2_controllers_yaml, zero_torque_path_overrides],
         output="both",
     )
 

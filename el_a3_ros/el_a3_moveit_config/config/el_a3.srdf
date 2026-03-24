@@ -80,5 +80,27 @@ EL-A3 Robot Arm SRDF (Semantic Robot Description Format)
     <disable_collisions link1="l2_l3_urdf_asm" link2="part_9" reason="Never"/>
     <disable_collisions link1="l2_l3_urdf_asm" link2="l5_l6_urdf_asm" reason="Never"/>
 
+    <!-- base_link pairs (fixed base, structurally cannot collide with nearby links) -->
+    <disable_collisions link1="base_link" link2="l1_link_urdf_asm" reason="Never"/>
+    <disable_collisions link1="base_link" link2="l2_l3_urdf_asm" reason="Never"/>
+
+    <!-- Near-chain pairs (geometrically too far apart on this arm) -->
+    <disable_collisions link1="l1_urdf_urdf_asm" link2="l3_lnik_urdf_asm" reason="Never"/>
+    <disable_collisions link1="l1_link_urdf_asm" link2="l4_l5_urdf_asm" reason="Never"/>
+    <disable_collisions link1="l3_lnik_urdf_asm" link2="l5_l6_urdf_asm" reason="Never"/>
+    <disable_collisions link1="l4_l5_urdf_asm" link2="end_effector" reason="Never"/>
+    <disable_collisions link1="l4_l5_urdf_asm" link2="gripper_link" reason="Never"/>
+    <disable_collisions link1="part_9" link2="gripper_link" reason="Never"/>
+    <disable_collisions link1="l2_l3_urdf_asm" link2="end_effector" reason="Never"/>
+    <disable_collisions link1="l2_l3_urdf_asm" link2="gripper_link" reason="Never"/>
+    <disable_collisions link1="l3_lnik_urdf_asm" link2="end_effector" reason="Never"/>
+    <disable_collisions link1="l3_lnik_urdf_asm" link2="gripper_link" reason="Never"/>
+
+    <!--
+    NOTE: For a complete collision matrix, run MoveIt Setup Assistant:
+      ros2 launch moveit_setup_assistant setup_assistant.launch.py
+    and use "Self-Collisions" → "Generate Collision Matrix" with 10000+ samples.
+    -->
+
 </robot>
 

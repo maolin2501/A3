@@ -1,6 +1,10 @@
 ###############################################
 # MoveIt Servo configuration for EL-A3 robot arm
 # Uses Jacobian matrix for real-time Cartesian incremental control
+#
+# STATUS: NOT YET INTEGRATED — no launch file uses this config.
+# Current Xbox teleop uses el_a3_teleop (Jacobian IK node) instead.
+# This config is reserved for future MoveIt Servo integration.
 ###############################################
 
 use_gazebo: false

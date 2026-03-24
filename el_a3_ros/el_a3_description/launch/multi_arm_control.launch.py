@@ -192,7 +192,7 @@ def generate_controller_params(prefix: str, arm_name: str, update_rate: int) -> 
         f"/{arm_name}/{arm_ctrl_name}": {
             "ros__parameters": {
                 "joints": arm_joints,
-                "command_interfaces": ["position"],
+                "command_interfaces": ["position", "velocity"],
                 "state_interfaces": ["position", "velocity"],
                 "open_loop_control": True,
                 "allow_nonzero_velocity_at_trajectory_end": True,

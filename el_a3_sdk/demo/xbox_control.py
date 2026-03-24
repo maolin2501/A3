@@ -149,7 +149,7 @@ class XboxArmController:
 
     核心控制流程:
       100Hz 输入循环 → 末端位姿增量累加 → 完整 IK → 2 阶临界阻尼滤波 → JointCtrl
-      SDK 200Hz 控制循环 → PP 模式写 loc_ref（电机内部梯形规划，加速度 6 rad/s²，速度 3 rad/s）
+      SDK 200Hz 控制循环 → 运控模式 Type 1 帧（PD + 速度前馈 + 重力补偿）
     """
 
     def __init__(
@@ -542,7 +542,8 @@ class XboxArmController:
                 self._ik_filter_pos[i] = self._ik_raw[i] - err_new
                 self._ik_filter_vel[i] = vel_new
 
-        self._arm.JointCtrl(*self._ik_filter_pos)
+        self._arm.JointCtrl(*self._ik_filter_pos,
+                            velocities=list(self._ik_filter_vel))
 
     # ---- Button actions ----
 

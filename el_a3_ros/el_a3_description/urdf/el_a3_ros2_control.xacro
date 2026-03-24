@@ -21,8 +21,8 @@
           <param name="position_kp">100.0</param>
           <param name="position_kd">4.0</param>
           <param name="velocity_limit">10.0</param>
-          <!-- S-curve trajectory planning parameters -->
-          <param name="s_curve_enabled">false</param>   <!-- Temporarily disabled to avoid conflict with MoveIt trajectory -->
+          <!-- S-curve trajectory planning parameters (source: s_curve_generator.cpp, not compiled yet) -->
+          <param name="s_curve_enabled">false</param>   <!-- Disabled: conflicts with MoveIt trajectory; enable after adding to CMakeLists.txt -->
           <param name="max_velocity">3.0</param>        <!-- Max velocity limit rad/s -->
           <param name="max_acceleration">15.0</param>   <!-- Max acceleration limit rad/s² -->
           <param name="max_jerk">50.0</param>           <!-- Max jerk limit rad/s³ -->

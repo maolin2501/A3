@@ -92,12 +92,14 @@ class ELA3Interface:
         limit_stop_margin: float = 0.02,
         limit_decel_factor: float = 0.3,
         adaptive_kd_enabled: bool = True,
-        zero_torque_kd_min: float = 0.02,
-        zero_torque_kd_max: float = 1.0,
+        zero_torque_kd_min: float = 0.001,
+        zero_torque_kd_max: float = 0.15,
+        per_joint_kd_min: Optional[Dict[int, float]] = None,
+        per_joint_kd_max: Optional[Dict[int, float]] = None,
         kd_velocity_ref: float = 1.0,
         kd_smoothing_alpha: float = 0.15,
-        pp_velocity: float = 3.0,
-        pp_acceleration: float = 3.0,
+        pp_velocity: float = 6.0,
+        pp_acceleration: float = 15.0,
     ):
         """
         Args:
@@ -123,8 +125,10 @@ class ELA3Interface:
             limit_stop_margin: 限位硬停止区宽度 (rad)
             limit_decel_factor: 减速区最低增益比例 (0~1)
             adaptive_kd_enabled: 是否启用自适应 Kd
-            zero_torque_kd_min: 自适应 Kd 下限
-            zero_torque_kd_max: 自适应 Kd 上限
+            zero_torque_kd_min: 自适应 Kd 全局下限
+            zero_torque_kd_max: 自适应 Kd 全局上限
+            per_joint_kd_min: 每关节 Kd 下限 {motor_id: value}，覆盖全局值
+            per_joint_kd_max: 每关节 Kd 上限 {motor_id: value}，覆盖全局值
             kd_velocity_ref: 自适应 Kd 速度参考值 (rad/s)
             kd_smoothing_alpha: 自适应 Kd EMA 平滑系数
             pp_velocity: PP 模式最大速度 (rad/s)
@@ -188,6 +192,8 @@ class ELA3Interface:
         self._adaptive_kd_enabled = adaptive_kd_enabled
         self._zero_torque_kd_min = zero_torque_kd_min
         self._zero_torque_kd_max = zero_torque_kd_max
+        self._per_joint_kd_min = per_joint_kd_min or {}
+        self._per_joint_kd_max = per_joint_kd_max or {}
         self._kd_velocity_ref = kd_velocity_ref
         self._kd_smoothing_alpha = kd_smoothing_alpha
 
@@ -209,6 +215,8 @@ class ELA3Interface:
         self._vel_ma_buffer = [[0.0] * 4 for _ in range(n)]
         self._vel_ma_idx = [0] * n
         self._gravity_input_positions = [0.0] * n
+        self._gravity_smooth_alpha = 0.1
+        self._target_velocities = [0.0] * n
         self._adaptive_kd_values = [zero_torque_kd_max] * self.NUM_JOINTS
         self._first_command = True
 
@@ -289,6 +297,7 @@ class ELA3Interface:
                 with self._cmd_lock:
                     for i in range(min(len(fb), self.NUM_ARM_JOINTS)):
                         self._target_positions[i] = fb[i]
+                        self._gravity_input_positions[i] = fb[i]
                 logger.info("控制循环初始位置 (反馈): %s",
                             [f"{v:.3f}" for v in fb[:self.NUM_ARM_JOINTS]])
                 fb_ok = True
@@ -345,8 +354,8 @@ class ELA3Interface:
     def _control_loop_tick(self, dt: float):
         """
         单次控制周期：
-        PP 位置模式：关节限位 → 写 loc_ref（电机内部梯形规划）
-        零力矩模式：Kp=0 + 自适应 Kd + 重力补偿（运控帧）
+        运控模式：关节限位 → 速度前馈 + 重力补偿 → send_motion_control (Type 1)
+        零力矩模式：Kp=0 + 自适应 Kd + 重力补偿（Type 1）
         """
         # --- 1. 从轨迹队列取目标 ---
         with self._traj_lock:
@@ -360,11 +369,17 @@ class ELA3Interface:
                 with self._cmd_lock:
                     for i in range(min(len(pt.positions), self.NUM_ARM_JOINTS)):
                         self._target_positions[i] = pt.positions[i]
+                    if pt.velocities:
+                        for i in range(min(len(pt.velocities), self.NUM_ARM_JOINTS)):
+                            self._target_velocities[i] = pt.velocities[i]
 
                 if self._traj_index >= len(self._trajectory) - 1:
                     self._trajectory = None
                     self._traj_index = 0
                     self._motion_done.set()
+                    with self._cmd_lock:
+                        for i in range(self.NUM_ARM_JOINTS):
+                            self._target_velocities[i] = 0.0
 
         with self._cmd_lock:
             target_positions = list(self._target_positions)
@@ -380,11 +395,27 @@ class ELA3Interface:
         if first_cmd:
             with self._state_lock:
                 self._first_command = False
+            self._last_cmd_positions = list(target_positions)
+            self._gravity_input_positions = list(target_positions)
+
+        # --- Gravity computation (EMA-smoothed, every tick) ---
+        if zero_torque:
+            gravity_raw_positions = self._read_feedback_positions()
+        else:
+            gravity_raw_positions = target_positions
+        alpha = self._gravity_smooth_alpha
+        for i in range(self.NUM_ARM_JOINTS):
+            self._gravity_input_positions[i] = (
+                alpha * gravity_raw_positions[i]
+                + (1.0 - alpha) * self._gravity_input_positions[i]
+            )
+        gravity_torques = self._compute_gravity_vector(self._gravity_input_positions)
+
+        # --- Read target velocities ---
+        with self._cmd_lock:
+            target_velocities = list(self._target_velocities)
 
         # --- Per-joint processing ---
-        if zero_torque:
-            gravity_torques = self._compute_gravity_vector(target_positions)
-
         for i in range(self.NUM_ARM_JOINTS):
             mid = i + 1
             direction = self._joint_directions.get(mid, 1.0)
@@ -416,14 +447,43 @@ class ELA3Interface:
                 self._driver.send_motion_control(
                     mid, current_motor_pos, 0.0, motor_kp, motor_kd, grav_torque)
             else:
-                self._driver.set_position_pp(mid, motor_pos)
+                vel_from_caller = target_velocities[i]
+                if abs(vel_from_caller) > 1e-6:
+                    vel_ff = vel_from_caller
+                else:
+                    vel_ff = (pos - self._last_cmd_positions[i]) / dt if dt > 0 else 0.0
+                vel_ff = clamp(vel_ff, -self._velocity_limit, self._velocity_limit)
+                motor_vel = vel_ff * direction
+
+                motor_kp = self._joint_kp.get(mid, self._position_kp)
+                motor_kd = self._joint_kd.get(mid, self._position_kd)
+                if abs(vel_ff) < 0.01:
+                    motor_kd = min(motor_kd * 1.25, 5.0)
+
+                grav_torque = gravity_torques[i] * direction * self._gravity_feedforward_ratio if gravity_torques else 0.0
+                self._driver.send_motion_control(
+                    mid, motor_pos, motor_vel, motor_kp, motor_kd, grav_torque)
 
             _busy_wait_us(150)
+
+        self._last_cmd_positions = list(target_positions)
 
         # --- Gripper ---
         if gripper_dirty and not zero_torque:
             gripper_motor_id = 7
             self._driver.set_position_pp(gripper_motor_id, gripper_target)
+
+    def _read_feedback_positions(self) -> List[float]:
+        """读取所有臂关节的反馈位置（URDF 坐标系）"""
+        positions = [0.0] * self.NUM_ARM_JOINTS
+        for i in range(self.NUM_ARM_JOINTS):
+            mid = i + 1
+            fb = self._driver.get_feedback(mid)
+            if fb and fb.is_valid:
+                direction = self._joint_directions.get(mid, 1.0)
+                offset = self._joint_offsets.get(mid, 0.0)
+                positions[i] = (fb.position - offset) * direction
+        return positions
 
     def _compute_gravity_vector(self, positions: List[float]) -> Optional[List[float]]:
         """计算 6 自由度重力补偿力矩"""
@@ -438,15 +498,17 @@ class ELA3Interface:
     def _compute_adaptive_kd(self, joint_idx: int, velocity: float, prev_kd: float) -> float:
         """
         自适应 Kd 计算（洛伦兹衰减 + EMA 平滑）
+        支持 per-joint kd_min/kd_max 覆盖全局值（与 ROS computeAdaptiveKd 一致）
 
         kd_raw = kd_min + (kd_max - kd_min) / (1 + (|v| / v_ref)^2)
         kd = alpha * kd_raw + (1 - alpha) * prev_kd
         """
+        mid = joint_idx + 1
+        kd_min = self._per_joint_kd_min.get(mid, self._zero_torque_kd_min)
+        kd_max = self._per_joint_kd_max.get(mid, self._zero_torque_kd_max)
         v = abs(velocity)
         ratio = v / max(self._kd_velocity_ref, 1e-6)
-        kd_raw = self._zero_torque_kd_min + (
-            (self._zero_torque_kd_max - self._zero_torque_kd_min) / (1.0 + ratio * ratio)
-        )
+        kd_raw = kd_min + (kd_max - kd_min) / (1.0 + ratio * ratio)
         kd = self._kd_smoothing_alpha * kd_raw + (1.0 - self._kd_smoothing_alpha) * prev_kd
         return clamp(kd, 0.0, 5.0)
 
@@ -454,15 +516,15 @@ class ELA3Interface:
     # 电机使能 / 失能
     # ================================================================
 
-    def EnableArm(self, motor_num: int = 0xFF, run_mode: RunMode = RunMode.POSITION_PP,
+    def EnableArm(self, motor_num: int = 0xFF, run_mode: RunMode = RunMode.MOTION_CONTROL,
                   startup_kd: float = 4.0) -> bool:
         """
         使能电机
 
         Args:
             motor_num: 电机编号（1-7 单个，0xFF=全部）
-            run_mode: 运行模式（默认 PP 位置模式）
-            startup_kd: 软启动阻尼系数（仅运控模式）
+            run_mode: 运行模式（默认运控模式）
+            startup_kd: 软启动阻尼系数（运控模式）
         """
         if not self._connected:
             logger.error("未连接，请先调用 ConnectPort()")
@@ -472,10 +534,13 @@ class ELA3Interface:
         success = True
 
         for mid in motor_ids:
+            is_gripper = (mid == self.NUM_JOINTS)
+            actual_mode = RunMode.POSITION_PP if is_gripper else run_mode
+
             self._driver.disable_motor(mid, clear_fault=True)
             time.sleep(0.03)
 
-            if not self._driver.set_run_mode(mid, run_mode):
+            if not self._driver.set_run_mode(mid, actual_mode):
                 logger.error("电机 %d 设置运行模式失败", mid)
                 success = False
                 continue
@@ -486,15 +551,19 @@ class ELA3Interface:
                 success = False
                 continue
 
-            if run_mode == RunMode.POSITION_PP:
+            if actual_mode == RunMode.POSITION_PP:
                 self._driver.set_pp_velocity(mid, self._pp_velocity)
                 time.sleep(0.005)
                 self._driver.set_pp_acceleration(mid, self._pp_acceleration)
                 time.sleep(0.005)
-            elif run_mode == RunMode.MOTION_CONTROL:
-                self._driver.send_motion_control(mid, 0.0, 0.0, 0.0, startup_kd, 0.0)
+            elif actual_mode == RunMode.MOTION_CONTROL:
+                self._driver.write_parameter(mid, ParamIndex.CAN_TIMEOUT, 0.0)
+                time.sleep(0.005)
+                fb = self._driver.get_feedback(mid)
+                init_pos = fb.position if (fb and fb.is_valid) else 0.0
+                self._driver.send_motion_control(mid, init_pos, 0.0, 5.0, startup_kd, 0.0)
 
-            logger.info("电机 %d 已使能 (mode=%s)", mid, run_mode.name)
+            logger.info("电机 %d 已使能 (mode=%s)", mid, actual_mode.name)
             time.sleep(0.03)
 
         if success:
@@ -574,12 +643,12 @@ class ELA3Interface:
             return
 
         run_mode_map = {
-            MoveMode.MOVE_J: RunMode.POSITION_PP,
+            MoveMode.MOVE_J: RunMode.MOTION_CONTROL,
             MoveMode.MOVE_CSP: RunMode.POSITION_CSP,
             MoveMode.MOVE_VELOCITY: RunMode.VELOCITY,
             MoveMode.MOVE_CURRENT: RunMode.CURRENT,
         }
-        target_run_mode = run_mode_map.get(self._move_mode, RunMode.POSITION_PP)
+        target_run_mode = run_mode_map.get(self._move_mode, RunMode.MOTION_CONTROL)
 
         for mid in range(1, self.NUM_JOINTS + 1):
             self._driver.disable_motor(mid, clear_fault=False)
@@ -604,18 +673,20 @@ class ELA3Interface:
         kd: Optional[float] = None,
         velocity: float = 0.0,
         torque_ff: Optional[List[float]] = None,
+        velocities: Optional[List[float]] = None,
     ) -> bool:
         """
-        关节角度控制（PP 模式）
+        关节角度控制（运控模式 Type 1）
 
-        如果控制循环正在运行，设置目标位置（由控制循环发送 loc_ref）。
-        否则直接写 loc_ref（PP 模式，电机内部梯形规划）。
+        如果控制循环正在运行，设置目标位置和速度前馈（由控制循环发送运控帧）。
+        否则直接发送运控帧。
 
         Args:
             joint_1~6: 目标关节角度 (rad)
-            kp, kd: PD 增益覆盖（PP 模式下忽略）
-            velocity: 速度前馈（PP 模式下忽略）
-            torque_ff: 力矩前馈（PP 模式下忽略）
+            kp, kd: PD 增益覆盖（None 则使用默认值）
+            velocity: 统一速度前馈 (rad/s)，仅非控制循环模式
+            torque_ff: 各关节力矩前馈 (Nm)，长度 6
+            velocities: 各关节速度前馈 (rad/s)，长度 6，控制循环优先使用
         """
         if not self._connected:
             logger.error("未连接")
@@ -632,7 +703,16 @@ class ELA3Interface:
             with self._cmd_lock:
                 for i in range(self.NUM_ARM_JOINTS):
                     self._target_positions[i] = positions[i]
+                if velocities and len(velocities) >= self.NUM_ARM_JOINTS:
+                    for i in range(self.NUM_ARM_JOINTS):
+                        self._target_velocities[i] = velocities[i]
+                else:
+                    for i in range(self.NUM_ARM_JOINTS):
+                        self._target_velocities[i] = 0.0
             return True
+
+        motor_kp = kp if kp is not None else self._position_kp
+        motor_kd = kd if kd is not None else self._position_kd
 
         success = True
         for i, mid in enumerate(range(1, self.NUM_ARM_JOINTS + 1)):
@@ -645,8 +725,11 @@ class ELA3Interface:
             direction = self._joint_directions.get(mid, 1.0)
             offset = self._joint_offsets.get(mid, 0.0)
             motor_pos = target_pos * direction + offset
+            motor_vel = velocity * direction
+            torque = torque_ff[i] * direction if torque_ff and i < len(torque_ff) else 0.0
 
-            if not self._driver.set_position_pp(mid, motor_pos):
+            if not self._driver.send_motion_control(
+                    mid, motor_pos, motor_vel, motor_kp, motor_kd, torque):
                 success = False
             _busy_wait_us(150)
 
@@ -720,19 +803,28 @@ class ELA3Interface:
 
         if enable:
             for mid in range(1, self.NUM_JOINTS + 1):
+                is_gripper = (mid == self.NUM_JOINTS)
                 self._driver.disable_motor(mid, clear_fault=False)
                 time.sleep(0.01)
-                self._driver.set_run_mode(mid, RunMode.MOTION_CONTROL)
+                if is_gripper:
+                    self._driver.set_run_mode(mid, RunMode.POSITION_PP)
+                else:
+                    self._driver.set_run_mode(mid, RunMode.MOTION_CONTROL)
                 time.sleep(0.01)
                 self._driver.enable_motor(mid)
                 time.sleep(0.01)
+                if is_gripper:
+                    self._driver.set_pp_velocity(mid, self._pp_velocity)
+                    time.sleep(0.005)
+                    self._driver.set_pp_acceleration(mid, self._pp_acceleration)
+                    time.sleep(0.005)
 
             for i in range(self.NUM_JOINTS):
                 self._adaptive_kd_values[i] = self._zero_torque_kd_max
 
             if not self._control_running:
                 grav = list(gravity_torques or [0.0] * self.NUM_JOINTS)
-                for i, mid in enumerate(range(1, self.NUM_JOINTS + 1)):
+                for i, mid in enumerate(range(1, self.NUM_ARM_JOINTS + 1)):
                     fb = self._driver.get_feedback(mid)
                     current_pos = fb.position if (fb and fb.is_valid) else 0.0
                     direction = self._joint_directions.get(mid, 1.0)
@@ -743,21 +835,33 @@ class ELA3Interface:
                            kd, "ON" if self._adaptive_kd_enabled else "OFF")
         else:
             for mid in range(1, self.NUM_JOINTS + 1):
+                is_gripper = (mid == self.NUM_JOINTS)
                 self._driver.disable_motor(mid, clear_fault=False)
                 time.sleep(0.01)
-                self._driver.set_run_mode(mid, RunMode.POSITION_PP)
+                if is_gripper:
+                    self._driver.set_run_mode(mid, RunMode.POSITION_PP)
+                else:
+                    self._driver.set_run_mode(mid, RunMode.MOTION_CONTROL)
                 time.sleep(0.01)
                 self._driver.enable_motor(mid)
                 time.sleep(0.005)
-                self._driver.set_pp_velocity(mid, self._pp_velocity)
-                time.sleep(0.005)
-                self._driver.set_pp_acceleration(mid, self._pp_acceleration)
+                if is_gripper:
+                    self._driver.set_pp_velocity(mid, self._pp_velocity)
+                    time.sleep(0.005)
+                    self._driver.set_pp_acceleration(mid, self._pp_acceleration)
+                else:
+                    self._driver.write_parameter(mid, ParamIndex.CAN_TIMEOUT, 0.0)
+                    time.sleep(0.005)
+                    fb = self._driver.get_feedback(mid)
+                    current_pos = fb.position if (fb and fb.is_valid) else 0.0
+                    self._driver.send_motion_control(
+                        mid, current_pos, 0.0, 0.0, self._position_kd, 0.0)
                 time.sleep(0.01)
 
             with self._state_lock:
                 self._state = ArmState.ENABLED
                 self._first_command = True
-            logger.info("零力矩模式已关闭，恢复 PP 位置控制")
+            logger.info("零力矩模式已关闭，恢复运控模式")
 
         return True
 
@@ -812,9 +916,17 @@ class ELA3Interface:
     def _zero_torque_gravity_loop(self, kd_list: list, dt: float):
         """零力矩 + 重力补偿后台循环（仅在控制循环未运行时使用）"""
         kin = self._get_kinematics()
+        smoothed = list(self._gravity_input_positions)
+        q_init = self.GetArmJointMsgs().to_list()
+        for i in range(min(len(q_init), len(smoothed))):
+            smoothed[i] = q_init[i]
+
+        alpha = self._gravity_smooth_alpha
         while self._zt_gravity_running and self._connected:
             q = self.GetArmJointMsgs().to_list()
-            arm_grav = kin.compute_gravity(q) if kin else [0.0] * self.NUM_ARM_JOINTS
+            for i in range(min(len(q), self.NUM_ARM_JOINTS)):
+                smoothed[i] = alpha * q[i] + (1.0 - alpha) * smoothed[i]
+            arm_grav = kin.compute_gravity(smoothed[:self.NUM_ARM_JOINTS]) if kin else [0.0] * self.NUM_ARM_JOINTS
             grav = list(arm_grav) + [0.0] * (self.NUM_JOINTS - len(arm_grav))
 
             for i, mid in enumerate(range(1, self.NUM_JOINTS + 1)):

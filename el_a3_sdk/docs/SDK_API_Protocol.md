@@ -16,7 +16,7 @@
 - [8. 轨迹规划](#8-轨迹规划)
 - [9. CAN 帧协议](#9-can-帧协议)
 - [10. 关节配置与限位](#10-关节配置与限位)
-- [11. Web API 接口 (SDK Bridge)](#11-web-api-接口-sdk-bridge)
+- [11. SDK 与 ROS Control 的关系](#11-sdk-与-ros-control-的关系)
 - [12. 使用示例](#12-使用示例)
 
 ---
@@ -896,57 +896,20 @@ SDK 默认启用软限位保护（`start_sdk_joint_limit=True`）。所有运动
 
 ---
 
-## 11. Web API 接口 (SDK Bridge)
+## 11. SDK 与 ROS Control 的关系
 
-> 注: Web UI SDK Bridge 已移至独立的 ROS 项目中 (已移除)
+本 SDK (`el_a3_sdk`) 通过 SocketCAN 直接与 Robstride 电机通信，适用于无 ROS 环境的独立控制、调试和标定。
 
-`SDKBridge` 通过 `ArmManager` + `ELA3ROSInterface` 桥接 Web 前端与 SDK。
+ROS2 环境下应使用 `el_a3_hardware` 包（C++ ros2_control 插件），它直接通过 CAN 总线控制电机，不依赖本 SDK。两者共享相同的底层 CAN 协议和 Pinocchio 动力学模型。
 
-### 11.1 REST API 端点
+| 场景 | 推荐方案 | 说明 |
+|------|---------|------|
+| 独立调试、标定、Demo | `el_a3_sdk` (Python) | 无需 ROS，pip install 即可使用 |
+| MoveIt 运动规划 | `el_a3_hardware` (C++ ros2_control) | 通过 ros2_control 接口集成 |
+| Xbox 遥操作 | `el_a3_teleop` (ROS2 节点) | 通过 ros2_control JointTrajectoryController |
+| 主从拖动示教 | `el_a3_sdk` ArmManager | 双臂独立 CAN 通信，低延迟 |
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/` | GET | 主页面 |
-| `/api/state` | GET | 当前机器人状态 |
-| `/api/history` | GET | 状态历史（图表数据） |
-| `/api/logs` | GET | 日志历史 |
-| `/api/joint_limits` | GET | 关节限位 |
-| `/api/motor_status` | GET | 电机使能状态 |
-| `/api/teleop_status` | GET | 遥操作进程状态 |
-| `/api/can_interfaces` | GET | 可用 CAN 接口 |
-| `/api/end_effector` | GET | 末端位姿 |
-| `/api/sdk_info` | GET | SDK 版本、臂状态、协议 |
-| `/api/dynamics` | GET | 重力力矩、动力学数据 |
-
-### 11.2 WebSocket 命令 (Client → Server)
-
-通过 Socket.IO `emit('command', {...})` 发送。
-
-| 命令 | 参数 | SDK 调用 |
-|------|------|---------|
-| `set_joints` | `positions` (6), `duration` | `MoveJ(positions, duration)` |
-| `set_single_joint` | `joint_index`, `position`, `duration` | `JointCtrlList(...)` |
-| `go_home` | `duration` | `PlanToJointGoal(home_positions)` |
-| `go_zero` | — | `PlanToJointGoal([0]*6)` |
-| `emergency_stop` | — | `EmergencyStop()` |
-| `set_gripper` | `angle` (rad) | `GripperCtrl(gripper_angle=angle)` |
-| `move_to_pose` | `x,y,z,rx,ry,rz`, `duration` | `EndPoseCtrl(...)` |
-| `plan_joint_goal` | `positions`, `velocity_scale` | `PlanToJointGoal(...)` |
-| `set_zero_torque` | `enable` | `ZeroTorqueMode(enable)` |
-| `enable_motors` | — | `EnableArm()` |
-| `disable_motors` | — | `DisableArm()` |
-| `start_teleop` | — | 启动 Xbox 遥操作子进程 |
-| `stop_teleop` | — | 停止 Xbox 遥操作子进程 |
-| `set_can_interface` | `interface` | 设置 CAN 接口 |
-
-### 11.3 WebSocket 事件 (Server → Client)
-
-| 事件 | 负载 | 说明 |
-|------|------|------|
-| `state` | joints, end_effector, sdk_version, arm_state, ... | 机器人状态推送 |
-| `log` | `{timestamp, level, message}` | 日志推送 |
-| `command_result` | `{success, type, ...}` | 命令执行结果 |
-| `error` | `{message}` | 错误消息 |
+> 注: 旧版 Web UI SDK Bridge 已移至独立项目，不包含在本仓库中。
 
 ---
 
@@ -1085,5 +1048,7 @@ print(f"gravity: {info.gravity_torques}")
 ---
 
 **关联文档**:
-- [README.md](../../README.md) — 系统总览与快速开始
-- [电机通信协议汇总.md](../../电机通信协议汇总.md) — 底层 CAN 协议详细说明（私有/CANopen/MIT）
+- [README.md](../README.md) — SDK 总览与快速开始
+- [电机通信协议汇总.md](./电机通信协议汇总.md) — 底层 CAN 协议详细说明（私有/CANopen/MIT）
+- [el_a3_ros README](../../el_a3_ros/README.md) — ROS2 控制系统文档
+- [ROS 接口参考](../../el_a3_ros/ROS_INTERFACE_REFERENCE.md) — ROS Topic / Action / Service 列表

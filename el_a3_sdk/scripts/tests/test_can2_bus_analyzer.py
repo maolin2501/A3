@@ -261,7 +261,7 @@ class Can2BusAnalyzer:
                   f"t={recv_time:.6f}")
 
         if self.use_ros:
-            self._ros_publish_type1(motor_id, pos, vel, torque, kp, kd, recv_time)
+            self._ros_publish_type1(recv_time)
 
     def _handle_type2(self, can_id: int, data: bytes, recv_time: float):
         """Type 2 电机反馈: motor_id 在 bit8-15, mode/fault 在 bit16-23"""
@@ -301,47 +301,49 @@ class Can2BusAnalyzer:
                   f"mode={mn} fault={fault_code} t={recv_time:.6f}")
 
         if self.use_ros:
-            self._ros_publish_type2(motor_id, pos, vel, torque, temp, recv_time)
+            self._ros_publish_type2(recv_time)
 
     # ========== ROS2 实时发布（帧驱动） ==========
 
-    def _ros_publish_type1(self, motor_id: int, pos: float, vel: float,
-                           torque: float, kp: float, kd: float, t: float):
-        stamp = self._make_stamp(t)
-        name = [f"motor_{motor_id}"]
+    def _ros_publish_type1(self, recv_time: float):
+        stamp = self._make_stamp(recv_time)
+        names = [f"motor_{mid}" for mid in MOTOR_IDS]
 
-        cmd = self._JointState()
-        cmd.header.stamp = stamp
-        cmd.name = name
-        cmd.position = [pos]
-        cmd.velocity = [vel]
-        cmd.effort = [torque]
+        with self._lock:
+            cmd = self._JointState()
+            cmd.header.stamp = stamp
+            cmd.name = names
+            cmd.position = [self._stats[mid].t1_pos for mid in MOTOR_IDS]
+            cmd.velocity = [self._stats[mid].t1_vel for mid in MOTOR_IDS]
+            cmd.effort = [self._stats[mid].t1_torque for mid in MOTOR_IDS]
+
+            gains = self._JointState()
+            gains.header.stamp = stamp
+            gains.name = names
+            gains.position = [self._stats[mid].t1_kp for mid in MOTOR_IDS]
+            gains.velocity = [self._stats[mid].t1_kd for mid in MOTOR_IDS]
+
         self._pub_t1_cmd.publish(cmd)
-
-        gains = self._JointState()
-        gains.header.stamp = stamp
-        gains.name = name
-        gains.position = [kp]
-        gains.velocity = [kd]
         self._pub_t1_gains.publish(gains)
 
-    def _ros_publish_type2(self, motor_id: int, pos: float, vel: float,
-                           torque: float, temp: float, t: float):
-        stamp = self._make_stamp(t)
-        name = [f"motor_{motor_id}"]
+    def _ros_publish_type2(self, recv_time: float):
+        stamp = self._make_stamp(recv_time)
+        names = [f"motor_{mid}" for mid in MOTOR_IDS]
 
-        fb = self._JointState()
-        fb.header.stamp = stamp
-        fb.name = name
-        fb.position = [pos]
-        fb.velocity = [vel]
-        fb.effort = [torque]
+        with self._lock:
+            fb = self._JointState()
+            fb.header.stamp = stamp
+            fb.name = names
+            fb.position = [self._stats[mid].t2_pos for mid in MOTOR_IDS]
+            fb.velocity = [self._stats[mid].t2_vel for mid in MOTOR_IDS]
+            fb.effort = [self._stats[mid].t2_torque for mid in MOTOR_IDS]
+
+            tm = self._JointState()
+            tm.header.stamp = stamp
+            tm.name = names
+            tm.effort = [self._stats[mid].t2_temp for mid in MOTOR_IDS]
+
         self._pub_t2_fb.publish(fb)
-
-        tm = self._JointState()
-        tm.header.stamp = stamp
-        tm.name = name
-        tm.effort = [temp]
         self._pub_t2_temp.publish(tm)
 
     def _ros_publish_stats(self):

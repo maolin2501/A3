@@ -10,5 +10,128 @@
 |------|------|------|
 | **Python SDK** | [`el_a3_sdk/`](el_a3_sdk/) | 纯 Python SDK，Direct CAN 通信，多臂管理，Pinocchio 动力学 |
 | **ROS2 控制系统** | [`el_a3_ros/`](el_a3_ros/) | ros2_control 硬件接口，MoveIt2 运动规划，URDF 描述 |
+| **硬件制造资料** | [`hardware/`](hardware/) | STEP 模型、3MF 打印文件、线束图纸、PCB 资料、组装 SOP |
 
 各子项目的详细文档请参阅对应目录下的 README.md。
+
+> **注意：** `hardware/` 目录中的大文件通过 Git LFS 管理，首次克隆后请执行 `git lfs pull`。
+
+---
+
+## 硬件要求
+
+| 项目 | 规格 |
+|------|------|
+| **机械臂** | EL-A3 7-DOF（6 臂关节 + L7 夹爪） |
+| **电机** | Robstride RS00 ×3（L1-L3）+ EL05/RS05 ×4（L4-L7） |
+| **CAN 适配器** | CANdle / gs_usb 兼容设备 |
+| **电源** | 24V / 48V 直流电源 |
+| **PC** | Ubuntu 22.04+ x86_64 |
+
+### 电机配置
+
+| 关节 | 电机ID | 型号 | 力矩限制 | 速度限制 | 位置限制 | 方向 |
+|------|--------|------|----------|----------|----------|------|
+| L1 | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
+| L2 | 2 | RS00 | ±14 Nm | ±33 rad/s | 0~3.67 rad (0°~210°) | +1 |
+| L3 | 3 | RS00 | ±14 Nm | ±33 rad/s | -4.01~0 rad (-230°~0°) | -1 |
+| L4 | 4 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+| L5 | 5 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | -1 |
+| L6 | 6 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+| L7（夹爪） | 7 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+
+## 软件环境
+
+| 依赖 | 版本 / 说明 |
+|------|------------|
+| **操作系统** | Ubuntu 22.04+ (x86_64) |
+| **Python** | 3.10+ |
+| **ROS2** | Humble Hawksbill（仅 ROS2 子项目需要） |
+| **CAN 总线** | SocketCAN · CAN 2.0 扩展帧 · 1 Mbps |
+| **核心 Python 依赖** | `numpy`、`pyyaml` |
+| **可选 Python 依赖** | `pinocchio`（`pip install pin`）— FK/IK/重力补偿 |
+| **ROS2 依赖** | `ros2_control`、`MoveIt2`、`pick_ik`、`joy` 等（通过 `scripts/install_deps.sh` 安装） |
+
+### CAN 接口配置
+
+```bash
+# 使用脚本（推荐）
+sudo bash scripts/setup_can.sh can0 1000000
+
+# 或手动配置
+sudo modprobe gs_usb
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 txqueuelen 1000
+sudo ip link set can0 up
+
+# 验证
+ip link show can0
+```
+
+---
+
+## English
+
+> A 7-DOF desktop robotic arm project comprising two independent sub-projects: a pure Python SDK and a ROS2 control system.
+
+### Sub-projects
+
+| Project | Path | Description |
+|---------|------|-------------|
+| **Python SDK** | [`el_a3_sdk/`](el_a3_sdk/) | Pure Python SDK with direct CAN communication, multi-arm management, and Pinocchio dynamics |
+| **ROS2 Control System** | [`el_a3_ros/`](el_a3_ros/) | ros2_control hardware interface, MoveIt2 motion planning, URDF description |
+| **Hardware Manufacturing** | [`hardware/`](hardware/) | STEP models, 3MF print files, wiring harness drawings, PCB files, assembly SOP |
+
+For detailed documentation, refer to the README.md in each sub-project directory.
+
+> **Note:** Large files in the `hardware/` directory are managed via Git LFS. Run `git lfs pull` after initial clone.
+
+### Hardware Requirements
+
+| Item | Specification |
+|------|---------------|
+| **Robotic Arm** | EL-A3 7-DOF (6 arm joints + L7 gripper) |
+| **Motors** | Robstride RS00 ×3 (L1-L3) + EL05/RS05 ×4 (L4-L7) |
+| **CAN Adapter** | CANdle / gs_usb compatible device |
+| **Power Supply** | 24V / 48V DC |
+| **PC** | Ubuntu 22.04+ x86_64 |
+
+#### Motor Configuration
+
+| Joint | Motor ID | Model | Torque Limit | Velocity Limit | Position Limit | Direction |
+|-------|----------|-------|-------------|----------------|----------------|-----------|
+| L1 | 1 | RS00 | ±14 Nm | ±33 rad/s | ±2.79 rad (±160°) | -1 |
+| L2 | 2 | RS00 | ±14 Nm | ±33 rad/s | 0~3.67 rad (0°~210°) | +1 |
+| L3 | 3 | RS00 | ±14 Nm | ±33 rad/s | -4.01~0 rad (-230°~0°) | -1 |
+| L4 | 4 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+| L5 | 5 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | -1 |
+| L6 | 6 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+| L7 (Gripper) | 7 | EL05/RS05 | ±6/±5.5 Nm | ±50 rad/s | ±1.57 rad (±90°) | +1 |
+
+### Software Environment
+
+| Dependency | Version / Notes |
+|------------|----------------|
+| **OS** | Ubuntu 22.04+ (x86_64) |
+| **Python** | 3.10+ |
+| **ROS2** | Humble Hawksbill (required only for the ROS2 sub-project) |
+| **CAN Bus** | SocketCAN · CAN 2.0 Extended Frame · 1 Mbps |
+| **Core Python Dependencies** | `numpy`, `pyyaml` |
+| **Optional Python Dependencies** | `pinocchio` (`pip install pin`) — FK/IK/Gravity compensation |
+| **ROS2 Dependencies** | `ros2_control`, `MoveIt2`, `pick_ik`, `joy`, etc. (install via `scripts/install_deps.sh`) |
+
+#### CAN Interface Setup
+
+```bash
+# Using the provided script (recommended)
+sudo bash scripts/setup_can.sh can0 1000000
+
+# Or configure manually
+sudo modprobe gs_usb
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 txqueuelen 1000
+sudo ip link set can0 up
+
+# Verify
+ip link show can0
+```

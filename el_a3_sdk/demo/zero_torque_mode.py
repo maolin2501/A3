@@ -27,10 +27,17 @@ from el_a3_sdk import ELA3Interface, LogLevel
 def main():
     use_gravity_comp = "--gravity" in sys.argv or "-g" in sys.argv
 
+    can_name = "can0"
+    for i, arg in enumerate(sys.argv):
+        if arg == "--can" and i + 1 < len(sys.argv):
+            can_name = sys.argv[i + 1]
+
     arm = ELA3Interface(
-        can_name="can0",
+        can_name=can_name,
         logger_level=LogLevel.INFO,
         inertia_config_path=os.path.join(_PROJECT_ROOT, 'resources', 'config', 'inertia_params.yaml'),
+        per_joint_kd_min={4: 0.005, 5: 0.005, 6: 0.005, 7: 0.02},
+        per_joint_kd_max={4: 0.10, 5: 0.05, 6: 0.05, 7: 0.10},
     )
 
     if not arm.ConnectPort():

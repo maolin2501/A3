@@ -97,5 +97,6 @@ zero_torque_controller:
       - L6_joint
       - L7_joint
     kd: 1.0
-    urdf_path: /home/wy/RS/A3/el_a3_description/urdf/el_a3.urdf
-    inertia_config_path: /home/wy/RS/A3/el_a3_description/config/inertia_params.yaml
+    # Resolved dynamically in launch files via get_package_share_directory()
+    urdf_path: ""
+    inertia_config_path: ""
