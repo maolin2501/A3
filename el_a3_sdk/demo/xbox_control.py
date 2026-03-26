@@ -36,7 +36,6 @@ EL-A3 手柄控制程序（纯 SDK，无 ROS 依赖）
   python3 xbox_control.py --debug                     # 调试模式
 """
 
-import struct
 import os
 import time
 import threading
@@ -47,84 +46,10 @@ import logging
 from typing import List, Optional
 
 from el_a3_sdk import ELA3Interface, ArmEndPose, LogLevel
+from el_a3_sdk.joystick import LinuxJoystick
 from el_a3_sdk.controller_profiles import PROFILES, ControllerProfile, detect_controller
 
 logger = logging.getLogger("xbox_control")
-
-
-# ================================================================
-# Linux Joystick Reader
-# ================================================================
-
-class LinuxJoystick:
-    """通过 Linux joystick API (/dev/input/jsX) 读取手柄输入
-
-    不依赖任何外部库，仅使用 Linux 内核 joystick 接口。
-    在后台线程中持续读取事件并更新共享状态。
-    """
-
-    JS_EVENT_BUTTON = 0x01
-    JS_EVENT_AXIS = 0x02
-    JS_EVENT_INIT = 0x80
-    EVENT_FORMAT = "IhBB"  # timestamp(u32), value(i16), type(u8), number(u8)
-    EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
-
-    MAX_AXES = 8
-    MAX_BUTTONS = 16
-
-    def __init__(self, device: str = "/dev/input/js0"):
-        self.device = device
-        self.axes: List[float] = [0.0] * self.MAX_AXES
-        self.buttons: List[int] = [0] * self.MAX_BUTTONS
-        self.connected = False
-        self._fd: Optional[int] = None
-        self._thread: Optional[threading.Thread] = None
-        self._running = False
-
-    def connect(self) -> bool:
-        try:
-            self._fd = os.open(self.device, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError as e:
-            logger.error("无法打开手柄设备 %s: %s", self.device, e)
-            return False
-
-        self.connected = True
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._read_loop, daemon=True, name="joystick_reader")
-        self._thread.start()
-        return True
-
-    def disconnect(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-        if self._fd is not None:
-            try:
-                os.close(self._fd)
-            except OSError:
-                pass
-            self._fd = None
-        self.connected = False
-
-    def _read_loop(self):
-        while self._running:
-            try:
-                data = os.read(self._fd, self.EVENT_SIZE)
-                if len(data) != self.EVENT_SIZE:
-                    continue
-                _ts, value, etype, number = struct.unpack(self.EVENT_FORMAT, data)
-                etype &= ~self.JS_EVENT_INIT
-                if etype == self.JS_EVENT_AXIS and number < self.MAX_AXES:
-                    self.axes[number] = value / 32767.0
-                elif etype == self.JS_EVENT_BUTTON and number < self.MAX_BUTTONS:
-                    self.buttons[number] = value
-            except BlockingIOError:
-                time.sleep(0.002)
-            except OSError:
-                self.connected = False
-                break
 
 
 # Speed levels: (display_name, scale_factor)
@@ -265,9 +190,8 @@ class XboxArmController:
         self._arm.MoveJ(ZERO_POSITIONS, duration=3.0, block=True)
         time.sleep(0.3)
 
-        q = self._arm.GetArmJointMsgs().to_list()[:6]
-        self._ik_seed = list(q)
-        self._ik_filter_pos = list(q)
+        self._ik_seed = list(ZERO_POSITIONS)
+        self._ik_filter_pos = list(ZERO_POSITIONS)
         self._ik_filter_vel = [0.0] * 6
         self._ik_raw = None
         self._seed_just_init = True
@@ -275,14 +199,13 @@ class XboxArmController:
         self._consecutive_ik_fails = 0
 
         if self._kin is not None:
-            self._target_pose = self._kin.forward_kinematics(q)
+            self._target_pose = self._kin.forward_kinematics(ZERO_POSITIONS)
             self._prev_pose = None
             p = self._target_pose
             logger.info("初始化完成, 末端位姿: (%.3f, %.3f, %.3f) m  (%.2f, %.2f, %.2f) rad",
                         p.x, p.y, p.z, p.rx, p.ry, p.rz)
         else:
             logger.info("初始化完成 (无运动学)")
-        logger.info("当前关节: %s", [f"{v:.3f}" for v in q])
 
     def _print_banner(self):
         print("\n" + "=" * 52)

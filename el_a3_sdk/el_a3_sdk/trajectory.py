@@ -73,6 +73,11 @@ class SCurvePlanner:
         """
         计算从 start 到 end 的 S-curve 剖面
 
+        统一处理所有情况：
+        1. 确定自然峰值速度 v_peak（无巡航、无 vm 约束时能覆盖 d 的速度）
+        2. 用 min(v_peak, vm) 作为实际峰值速度
+        3. 若 2*d_accel < d，补上巡航段
+
         Returns:
             SCurveProfile
         """
@@ -89,14 +94,43 @@ class SCurvePlanner:
             return prof
 
         t_j = am / jm
-        d_a = am * t_j
-        d_c = vm * (2 * t_j) + d_a
 
-        if d >= d_c:
-            prof = self._long_profile(d, vm, am, jm)
+        # --- Step 1: natural peak velocity (no cruise, no vm cap) ---
+        B = am * am / jm
+        disc = B * B + 4.0 * am * d
+        v_nat_trap = 0.5 * (-B + math.sqrt(disc)) if disc >= 0 else 0.0
+
+        if v_nat_trap > am * t_j:
+            v_natural = v_nat_trap
         else:
-            prof = self._short_profile(d, vm, am, jm)
+            t1_tri = (d / (2.0 * jm)) ** (1.0 / 3.0)
+            v_natural = jm * t1_tri * t1_tri
 
+        v_peak = min(v_natural, vm)
+
+        # --- Step 2: accel/decel segment timing ---
+        if v_peak >= am * t_j - self.EPSILON:
+            t1 = t_j
+            t2 = max(0.0, v_peak / am - t_j)
+            t3 = t_j
+            d_accel = v_peak * (am / jm + v_peak / am)
+        else:
+            t1 = math.sqrt(v_peak / jm)
+            t2 = 0.0
+            t3 = t1
+            d_accel = jm * t1 * t1 * t1
+
+        # --- Step 3: cruise phase ---
+        d_cruise = d - 2.0 * d_accel
+        t4 = max(0.0, d_cruise / v_peak) if v_peak > self.EPSILON else 0.0
+
+        prof = SCurveProfile()
+        prof.t1, prof.t2, prof.t3 = t1, t2, t3
+        prof.t4 = t4
+        prof.t5, prof.t6, prof.t7 = t3, t2, t1
+        prof.total_time = sum(prof.segment_times)
+        prof.v_cruise = v_peak
+        prof.a_limit = min(am, jm * t1)
         prof.direction = direction
         prof.distance = d
         prof.p0 = start
@@ -193,11 +227,15 @@ class SCurvePlanner:
         t2 = t_a - t_j
         t3 = t_j
 
-        d_accel = vm * (t_a)
+        if t2 < -self.EPSILON:
+            return self._short_profile(d, vm, am, jm)
+
+        t2 = max(0.0, t2)
+        d_accel = vm * (am / jm + vm / am)
         d_decel = d_accel
         d_cruise = d - d_accel - d_decel
 
-        if d_cruise < 0:
+        if d_cruise < -self.EPSILON:
             return self._short_profile(d, vm, am, jm)
 
         t4 = d_cruise / vm
@@ -218,19 +256,18 @@ class SCurvePlanner:
         """距离不足以达到最大速度，需降低巡航速度"""
         t_j = am / jm
 
-        v_peak = 0.5 * (-am + math.sqrt(am**2 + 4 * jm * d / 2))
-        if v_peak < 0:
-            v_peak = math.sqrt(d * jm / 2)
-
+        B = am * am / jm
+        disc = B * B + 4.0 * am * d
+        v_peak = 0.5 * (-B + math.sqrt(disc)) if disc >= 0 else 0.0
         v_peak = min(v_peak, vm)
 
-        if v_peak > am * t_j:
-            t_a = v_peak / am
+        if v_peak >= am * t_j - self.EPSILON:
             t1 = t_j
-            t2 = t_a - t_j
+            t2 = v_peak / am - t_j
             t3 = t_j
         else:
-            t1 = math.sqrt(v_peak / jm)
+            t1 = (d / (2.0 * jm)) ** (1.0 / 3.0)
+            v_peak = jm * t1 * t1
             t2 = 0.0
             t3 = t1
 
@@ -269,6 +306,8 @@ class MultiJointPlanner:
         """
         同步规划：所有关节同时到达
 
+        通过二分搜索 v_max 使每个关节的规划时间匹配最慢关节。
+
         Returns:
             各关节的 SCurveProfile 列表
         """
@@ -294,16 +333,28 @@ class MultiJointPlanner:
                 synced.append(prof)
                 continue
 
-            scale = profiles[i].total_time / max_time if profiles[i].total_time > 0 else 1.0
-            scaled_v = vm_list[i] * scale
-            scaled_a = am_list[i] * scale
+            if abs(profiles[i].total_time - max_time) < 1e-4:
+                synced.append(profiles[i])
+                continue
 
-            prof = self._planners[i].plan(
-                starts[i], ends[i],
-                v_max=max(scaled_v, d / max_time * 1.5),
-                a_max=max(scaled_a, d / max_time * 3.0),
-            )
-            synced.append(prof)
+            vm_hi = vm_list[i]
+            vm_lo = d / max_time
+            am_i = am_list[i]
+            best = profiles[i]
+
+            for _ in range(20):
+                vm_mid = 0.5 * (vm_lo + vm_hi)
+                trial = self._planners[i].plan(starts[i], ends[i], vm_mid, am_i)
+                if trial.total_time > max_time:
+                    vm_lo = vm_mid
+                else:
+                    vm_hi = vm_mid
+                    best = trial
+                if abs(trial.total_time - max_time) < 1e-4:
+                    best = trial
+                    break
+
+            synced.append(best)
 
         return synced
 
@@ -338,6 +389,14 @@ class MultiJointPlanner:
                 vel.append(v)
                 acc.append(a)
             points.append(TrajectoryPoint(time=t, positions=pos, velocities=vel, accelerations=acc))
+
+        if points:
+            last = points[-1]
+            for i, prof in enumerate(profiles):
+                target = prof.p0 + prof.direction * prof.distance
+                last.positions[i] = target
+                last.velocities[i] = 0.0
+                last.accelerations[i] = 0.0
 
         return points
 

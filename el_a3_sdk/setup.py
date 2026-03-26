@@ -13,6 +13,17 @@ setup(
     ],
     extras_require={
         "dynamics": ["pin"],
+        "debugger": [
+            "pyqt6",
+            "pyqtgraph",
+            "pyvista",
+            "pyvistaqt",
+        ],
+    },
+    entry_points={
+        "console_scripts": [
+            "el-a3-debugger=debugger.main:main",
+        ],
     },
     classifiers=[
         "Programming Language :: Python :: 3",

@@ -451,7 +451,10 @@ class ELA3Interface:
                 if abs(vel_from_caller) > 1e-6:
                     vel_ff = vel_from_caller
                 else:
-                    vel_ff = (pos - self._last_cmd_positions[i]) / dt if dt > 0 else 0.0
+                    diff = pos - self._last_cmd_positions[i]
+                    vel_ff = diff / dt if dt > 0 else 0.0
+                    if abs(diff) > 0.05:
+                        vel_ff = 0.0
                 vel_ff = clamp(vel_ff, -self._velocity_limit, self._velocity_limit)
                 motor_vel = vel_ff * direction
 
@@ -1301,8 +1304,13 @@ class ELA3Interface:
         from el_a3_sdk.trajectory import MultiJointPlanner, TrajectoryPoint
 
         if self._control_running:
+            fb = self._read_feedback_positions()
+            start_q = list(fb)
             with self._cmd_lock:
-                start_q = list(self._target_positions)
+                for i in range(self.NUM_ARM_JOINTS):
+                    self._target_positions[i] = fb[i]
+                    self._target_velocities[i] = 0.0
+            self._last_cmd_positions = list(fb)
         else:
             start_q = self.GetArmJointMsgs().to_list()[:self.NUM_ARM_JOINTS]
 
