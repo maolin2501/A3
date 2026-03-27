@@ -216,7 +216,8 @@ class RobstrideCanDriver:
         """解析 Type 17 参数读取应答"""
         status = (can_id >> 16) & 0xFF
         param_index = struct.unpack("<H", data[0:2])[0]
-        value = struct.unpack("<f", data[4:8])[0]
+        raw = bytes(data[4:8])
+        value = struct.unpack("<f", raw)[0]
 
         result = ParamReadResult(
             motor_id=motor_id,
@@ -224,6 +225,7 @@ class RobstrideCanDriver:
             value=value,
             success=(status == 0),
             timestamp=time.time(),
+            raw_bytes=raw,
         )
         with self._lock:
             self._param_results[motor_id] = result

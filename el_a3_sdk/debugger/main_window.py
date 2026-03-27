@@ -189,6 +189,10 @@ class MainWindow(QMainWindow):
             lambda: self.worker.submit_command("verify_zero_sta")
         )
         self.worker.zero_sta_verified.connect(diag.update_zero_sta_result)
+        diag.scan_motors_requested.connect(
+            lambda: self.worker.submit_command("scan_motors")
+        )
+        self.worker.motor_scan_result.connect(diag.update_scan_result)
 
         self.gamepad_panel.gamepad_log.connect(self._append_log)
         self.worker.connected_changed.connect(self._on_connected_for_gamepad)
@@ -216,8 +220,8 @@ class MainWindow(QMainWindow):
         elif not connected:
             self.gamepad_panel.set_arm(None)
 
-    def _on_connect(self, can_name: str, sim_mode: bool):
-        self.worker.submit_command("connect", can_name, sim_mode)
+    def _on_connect(self, can_name: str):
+        self.worker.submit_command("connect", can_name)
 
     def _on_joints_updated(self, joint_states):
         self._last_joint_states = joint_states

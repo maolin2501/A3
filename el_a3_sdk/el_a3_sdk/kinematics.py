@@ -265,7 +265,18 @@ class ELA3Kinematics:
                 lam = max(lam, damping + 0.02 * rc)
 
             JtJ = J.T @ J + lam * np.eye(self._model.nv)
-            dq = np.linalg.solve(JtJ, J.T @ err)
+            rhs = J.T @ err
+
+            q5_idx = 4
+            q5_val = float(q_pin[q5_idx])
+            q5_safe = 0.1
+            if abs(q5_val) < q5_safe and s_min < s_thresh:
+                grad = np.zeros(self._model.nv)
+                sign = 1.0 if q5_val >= 0 else -1.0
+                grad[q5_idx] = 0.5 * (q5_safe * sign - q5_val)
+                rhs += lam * grad
+
+            dq = np.linalg.solve(JtJ, rhs)
 
             dq_norm = float(np.linalg.norm(dq))
             if dq_norm > max_step:

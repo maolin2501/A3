@@ -161,6 +161,21 @@ class ParamReadResult:
     value: float = 0.0
     success: bool = False
     timestamp: float = 0.0
+    raw_bytes: bytes = b"\x00\x00\x00\x00"
+
+    @property
+    def value_uint8(self) -> int:
+        return self.raw_bytes[0] if self.raw_bytes else 0
+
+    @property
+    def value_uint16(self) -> int:
+        import struct as _st
+        return _st.unpack_from("<H", self.raw_bytes, 0)[0] if len(self.raw_bytes) >= 2 else 0
+
+    @property
+    def value_uint32(self) -> int:
+        import struct as _st
+        return _st.unpack_from("<I", self.raw_bytes, 0)[0] if len(self.raw_bytes) >= 4 else 0
 
 
 @dataclass

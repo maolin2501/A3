@@ -35,6 +35,7 @@ class DiagnosticsPanel(QWidget):
     write_param_requested = pyqtSignal(int, int, float)  # motor_id, param_index, value
     set_zero_requested = pyqtSignal(int)  # motor_num
     verify_zero_sta_requested = pyqtSignal()
+    scan_motors_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,6 +69,39 @@ class DiagnosticsPanel(QWidget):
         motor_layout.addWidget(self.motor_table)
         motor_group.setLayout(motor_layout)
         layout.addWidget(motor_group)
+
+        scan_group = QGroupBox("电机扫描")
+        scan_vlayout = QVBoxLayout()
+        scan_vlayout.setSpacing(4)
+
+        scan_row = QHBoxLayout()
+        self.scan_btn = QPushButton("扫描电机")
+        self.scan_btn.setToolTip("依次探测电机 1-7，读取固件版本与母线电压")
+        self.scan_btn.clicked.connect(self.scan_motors_requested.emit)
+        scan_row.addWidget(self.scan_btn)
+        self.scan_status = QLabel("未扫描")
+        self.scan_status.setStyleSheet("font-weight: bold;")
+        scan_row.addWidget(self.scan_status)
+        scan_row.addStretch()
+        scan_vlayout.addLayout(scan_row)
+
+        self.scan_table = QTableWidget(7, 4)
+        self.scan_table.setHorizontalHeaderLabels(["电机ID", "状态", "固件版本", "母线电压(V)"])
+        self.scan_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.scan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for i in range(7):
+            self.scan_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+            for j in range(1, 4):
+                self.scan_table.setItem(i, j, QTableWidgetItem("—"))
+        self.scan_table.setMaximumHeight(200)
+        self.scan_table.verticalHeader().setDefaultSectionSize(24)
+        self.scan_table.verticalHeader().setVisible(False)
+        scan_vlayout.addWidget(self.scan_table)
+
+        scan_group.setLayout(scan_vlayout)
+        layout.addWidget(scan_group)
 
         param_group = QGroupBox("参数读写")
         param_vlayout = QVBoxLayout()
@@ -212,6 +246,37 @@ class DiagnosticsPanel(QWidget):
                     if hasattr(fb, 'is_valid'):
                         self.motor_table.item(row, 7).setText("是" if fb.is_valid else "否")
 
+    def update_scan_result(self, results: list):
+        """更新电机扫描结果: [(motor_id, online, firmware_str, voltage), ...]"""
+        online_count = 0
+        for motor_id, online, fw_str, voltage in results:
+            row = motor_id - 1
+            if row < 0 or row >= 7:
+                continue
+            if online:
+                online_count += 1
+                self.scan_table.item(row, 1).setText("在线")
+                self.scan_table.item(row, 1).setForeground(
+                    self.scan_table.item(row, 1).foreground())
+                item_status = self.scan_table.item(row, 1)
+                item_status.setText("在线")
+                self.scan_table.item(row, 2).setText(fw_str if fw_str else "—")
+                self.scan_table.item(row, 3).setText(
+                    f"{voltage:.1f}" if voltage is not None else "—")
+            else:
+                item_status = self.scan_table.item(row, 1)
+                item_status.setText("离线")
+                self.scan_table.item(row, 2).setText("—")
+                self.scan_table.item(row, 3).setText("—")
+
+        self.scan_status.setText(f"{online_count}/7 在线")
+        if online_count == 7:
+            self.scan_status.setStyleSheet("font-weight: bold; color: #a6e3a1;")
+        elif online_count > 0:
+            self.scan_status.setStyleSheet("font-weight: bold; color: #f9e2af;")
+        else:
+            self.scan_status.setStyleSheet("font-weight: bold; color: #f38ba8;")
+
     def update_zero_sta_result(self, results: list):
         """更新 ZERO_STA 校验结果: [(motor_id, value, success), ...]"""
         all_ok = True
@@ -223,12 +288,12 @@ class DiagnosticsPanel(QWidget):
                     self._verify_labels[idx].setStyleSheet(
                         "font-family: monospace; color: #f38ba8; font-weight: bold;")
                     all_ok = False
-                elif abs(value - 1.0) < 0.01:
-                    self._verify_labels[idx].setText(f"{value:.0f} ✓")
+                elif value == 1:
+                    self._verify_labels[idx].setText(f"{value} ✓")
                     self._verify_labels[idx].setStyleSheet(
                         "font-family: monospace; color: #a6e3a1; font-weight: bold;")
                 else:
-                    self._verify_labels[idx].setText(f"{value:.0f} ✗")
+                    self._verify_labels[idx].setText(f"{value} ✗")
                     self._verify_labels[idx].setStyleSheet(
                         "font-family: monospace; color: #f38ba8; font-weight: bold;")
                     all_ok = False

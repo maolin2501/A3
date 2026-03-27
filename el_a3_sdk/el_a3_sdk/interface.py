@@ -40,7 +40,6 @@ from el_a3_sdk.utils import clamp, slerp_euler
 
 logger = logging.getLogger("el_a3_sdk")
 
-
 class ELA3Interface:
     """
     EL-A3 机械臂主接口（纯 Python SDK）
@@ -487,6 +486,42 @@ class ELA3Interface:
                 offset = self._joint_offsets.get(mid, 0.0)
                 positions[i] = (fb.position - offset) * direction
         return positions
+
+    def _sync_command_targets_from_feedback(self, retries: int = 5, delay_s: float = 0.02) -> List[float]:
+        """将控制缓存重同步到最新反馈，避免旧目标在设零后继续生效。"""
+        feedback = None
+        for _ in range(max(1, retries)):
+            js = self.GetArmJointMsgs()
+            if js is not None and js.timestamp > 0:
+                feedback = js.to_list(include_gripper=True)
+                break
+            time.sleep(delay_s)
+
+        if feedback is None:
+            feedback = self._read_feedback_positions()
+            gripper_fb = self._driver.get_feedback(self.NUM_JOINTS)
+            if gripper_fb and gripper_fb.is_valid:
+                direction = self._joint_directions.get(self.NUM_JOINTS, 1.0)
+                offset = self._joint_offsets.get(self.NUM_JOINTS, 0.0)
+                feedback.append((gripper_fb.position - offset) * direction)
+            else:
+                feedback.append(self._target_gripper)
+
+        arm_feedback = list(feedback[:self.NUM_ARM_JOINTS])
+        gripper_feedback = feedback[self.NUM_ARM_JOINTS] if len(feedback) > self.NUM_ARM_JOINTS else self._target_gripper
+
+        with self._cmd_lock:
+            self._target_positions = list(arm_feedback)
+            self._last_cmd_positions = list(arm_feedback)
+            self._gravity_input_positions = list(arm_feedback)
+            self._target_velocities = [0.0] * self.NUM_ARM_JOINTS
+            self._target_gripper = gripper_feedback
+            self._gripper_dirty = False
+
+        with self._state_lock:
+            self._first_command = True
+
+        return arm_feedback
 
     def _compute_gravity_vector(self, positions: List[float]) -> Optional[List[float]]:
         """计算 6 自由度重力补偿力矩"""
@@ -1128,12 +1163,25 @@ class ELA3Interface:
     # ================================================================
 
     def SetZeroPosition(self, motor_num: int = 0xFF) -> bool:
+        was_control_running = self._control_running
+        if was_control_running:
+            self.stop_control_loop()
+
         motor_ids = self._resolve_motor_ids(motor_num)
         success = True
-        for mid in motor_ids:
-            if not self._driver.set_zero_position(mid):
-                success = False
+        try:
+            for mid in motor_ids:
+                if not self._driver.set_zero_position(mid):
+                    success = False
+                time.sleep(0.05)
+
+            # 给反馈一点时间刷新，再将控制目标对齐到新的零点坐标系。
             time.sleep(0.05)
+            synced = self._sync_command_targets_from_feedback()
+            logger.info("设零后目标已重同步: %s", [f"{v:.3f}" for v in synced])
+        finally:
+            if was_control_running:
+                self.start_control_loop(rate_hz=self._control_rate_hz)
         return success
 
     # ================================================================

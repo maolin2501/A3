@@ -143,6 +143,9 @@ class XboxTeleopNode(Node):
 
         self._current_q: Optional[List[float]] = None
         self._joint_state_received = False
+        self._q_buffer: List[List[float]] = []
+        self._q_buffer_size = 5
+        self._resync_cooldown = 0
 
         # Joy state
         self._joy_axes: List[float] = [0.0] * 8
@@ -179,6 +182,9 @@ class XboxTeleopNode(Node):
                 found += 1
         if found == 6:
             self._current_q = q
+            self._q_buffer.append(list(q))
+            if len(self._q_buffer) > self._q_buffer_size:
+                self._q_buffer.pop(0)
             if not self._joint_state_received:
                 self._joint_state_received = True
                 self.get_logger().info(
@@ -283,6 +289,13 @@ class XboxTeleopNode(Node):
             self._periodic_status()
             return
 
+        # --- Resync cooldown: let system stabilize after resync ---
+        if self._resync_cooldown > 0:
+            self._resync_cooldown -= 1
+            self._send_filtered()
+            self._periodic_status()
+            return
+
         # --- End-effector velocity mapping ---
         max_lin = self._max_lin_vel * self._speed_factor
         max_ang = self._max_ang_vel * self._speed_factor
@@ -330,6 +343,16 @@ class XboxTeleopNode(Node):
                     self._ik_raw = q_sol
                     self._ik_seed = list(q_sol)
                     self._consecutive_ik_fails = 0
+
+                    if ik_err > 0.01:
+                        fk_achieved = self._kin.forward_kinematics(q_sol)
+                        blend = min((ik_err - 0.01) * 20.0, 0.7)
+                        self._target_pose.x += blend * (fk_achieved.x - self._target_pose.x)
+                        self._target_pose.y += blend * (fk_achieved.y - self._target_pose.y)
+                        self._target_pose.z += blend * (fk_achieved.z - self._target_pose.z)
+                        self._target_pose.rx += blend * (fk_achieved.rx - self._target_pose.rx)
+                        self._target_pose.ry += blend * (fk_achieved.ry - self._target_pose.ry)
+                        self._target_pose.rz += blend * (fk_achieved.rz - self._target_pose.rz)
                 else:
                     self._target_pose = self._prev_pose
                     self._consecutive_ik_fails += 1
@@ -400,18 +423,26 @@ class XboxTeleopNode(Node):
             self._resync_ik()
         return False
 
+    def _get_averaged_q(self) -> Optional[List[float]]:
+        if not self._q_buffer:
+            return list(self._current_q) if self._current_q else None
+        n = len(self._q_buffer)
+        return [sum(self._q_buffer[s][i] for s in range(n)) / n for i in range(6)]
+
     def _resync_ik(self) -> None:
-        if self._current_q is None:
+        q_avg = self._get_averaged_q()
+        if q_avg is None:
             return
-        q = list(self._current_q)
-        self._ik_seed = list(q)
-        self._ik_filter_pos = list(q)
-        self._ik_filter_vel = [0.0] * 6
-        self._ik_raw = None
+        self._ik_seed = list(q_avg)
+        self._ik_filter_pos = list(q_avg)
+        self._ik_raw = list(q_avg)
+        for i in range(6):
+            self._ik_filter_vel[i] *= 0.2
         self._seed_just_init = True
         self._consecutive_rejects = 0
         self._consecutive_ik_fails = 0
-        self._target_pose = self._kin.forward_kinematics(q)
+        self._resync_cooldown = 5
+        self._target_pose = self._kin.forward_kinematics(q_avg)
         self._prev_pose = None
 
     # ================================================================
@@ -510,7 +541,7 @@ class XboxTeleopNode(Node):
             self._ik_seed = list(positions)
             self._ik_filter_pos = list(positions)
             self._ik_filter_vel = [0.0] * 6
-            self._ik_raw = None
+            self._ik_raw = list(positions)
             self._seed_just_init = True
             self._consecutive_rejects = 0
             self._consecutive_ik_fails = 0

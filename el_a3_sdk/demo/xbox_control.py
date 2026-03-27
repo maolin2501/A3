@@ -51,7 +51,6 @@ from el_a3_sdk.controller_profiles import PROFILES, ControllerProfile, detect_co
 
 logger = logging.getLogger("xbox_control")
 
-
 # Speed levels: (display_name, scale_factor)
 SPEED_LEVELS = [
     ("极慢", 0.10),
@@ -133,6 +132,7 @@ class XboxArmController:
         self._consecutive_rejects = 0
         self._consecutive_ik_fails = 0
         self._seed_just_init = False
+        self._resync_cooldown = 0
 
         # Input EMA state (velocity → position delta)
         self._sv = [0.0] * 6  # [vx, vy, vz, wroll, wpitch, wyaw]
@@ -149,6 +149,7 @@ class XboxArmController:
         # Diagnostics
         self._diag_tick = 0
         self._diag_t0 = 0.0
+        self._post_move_probe_ticks = 0
 
     @property
     def exit_requested(self) -> bool:
@@ -353,10 +354,20 @@ class XboxArmController:
             a = self._input_alpha
             self._sv = [a * r + (1 - a) * s for r, s in zip(raw, self._sv)]
 
+        # ---- Resync cooldown: let system stabilize after resync ----
+        if self._resync_cooldown > 0:
+            self._resync_cooldown -= 1
+            self._send_filtered()
+            self._periodic_status()
+            return
+
         # ---- Accumulate to target pose and solve full IK ----
         sv = self._sv
         sv_mag = sum(abs(v) for v in sv)
         has_input = sv_mag > 1e-7
+
+        if self._post_move_probe_ticks > 0:
+            self._post_move_probe_ticks -= 1
 
         if has_input:
             p = self._target_pose
@@ -380,6 +391,16 @@ class XboxArmController:
                     self._ik_raw = q_sol
                     self._ik_seed = list(q_sol)
                     self._consecutive_ik_fails = 0
+
+                    if ik_err > 0.01:
+                        fk_achieved = self._kin.forward_kinematics(q_sol)
+                        blend = min((ik_err - 0.01) * 20.0, 0.7)
+                        self._target_pose.x += blend * (fk_achieved.x - self._target_pose.x)
+                        self._target_pose.y += blend * (fk_achieved.y - self._target_pose.y)
+                        self._target_pose.z += blend * (fk_achieved.z - self._target_pose.z)
+                        self._target_pose.rx += blend * (fk_achieved.rx - self._target_pose.rx)
+                        self._target_pose.ry += blend * (fk_achieved.ry - self._target_pose.ry)
+                        self._target_pose.rz += blend * (fk_achieved.rz - self._target_pose.rz)
                 else:
                     self._target_pose = self._prev_pose
                     self._consecutive_ik_fails += 1
@@ -427,18 +448,28 @@ class XboxArmController:
             self._resync_ik()
         return False
 
+    def _read_averaged_feedback(self, n_samples: int = 5, interval: float = 0.004) -> List[float]:
+        samples = []
+        for _ in range(n_samples):
+            q = self._arm.GetArmJointMsgs().to_list()[:6]
+            samples.append(q)
+            time.sleep(interval)
+        return [sum(s[i] for s in samples) / len(samples) for i in range(6)]
+
     def _resync_ik(self):
-        q = self._arm.GetArmJointMsgs().to_list()[:6]
-        self._ik_seed = list(q)
-        self._ik_filter_pos = list(q)
-        self._ik_filter_vel = [0.0] * 6
-        self._ik_raw = None
+        q_avg = self._read_averaged_feedback()
+        self._ik_seed = list(q_avg)
+        self._ik_filter_pos = list(q_avg)
+        self._ik_raw = list(q_avg)
+        for i in range(6):
+            self._ik_filter_vel[i] *= 0.2
         self._seed_just_init = True
         self._consecutive_rejects = 0
         self._consecutive_ik_fails = 0
+        self._resync_cooldown = 5
 
         if self._kin is not None:
-            self._target_pose = self._kin.forward_kinematics(q)
+            self._target_pose = self._kin.forward_kinematics(q_avg)
             self._prev_pose = None
 
     # ---- 2nd-order filter and motor command ----
@@ -491,10 +522,11 @@ class XboxArmController:
                 self._arm.start_control_loop(rate_hz=200.0)
                 self._estop = False
             self._arm.MoveJ(positions, duration=2.0, block=True)
+            feedback_q = self._arm.GetArmJointMsgs().to_list()[:6]
             self._ik_seed = list(positions)
             self._ik_filter_pos = list(positions)
             self._ik_filter_vel = [0.0] * 6
-            self._ik_raw = None
+            self._ik_raw = list(positions)
             self._seed_just_init = True
             self._consecutive_rejects = 0
             self._consecutive_ik_fails = 0
@@ -503,6 +535,7 @@ class XboxArmController:
                 self._target_pose = self._kin.forward_kinematics(positions)
                 self._prev_pose = None
 
+            self._post_move_probe_ticks = 5
             logger.info("已到达 %s", name)
         except Exception as e:
             logger.error("运动异常: %s", e)
@@ -517,7 +550,7 @@ class XboxArmController:
         logger.info("%s 零力矩模式...", "开启" if new_state else "关闭")
 
         if not new_state:
-            q = self._arm.GetArmJointMsgs().to_list()[:6]
+            q = self._read_averaged_feedback()
             self._arm.JointCtrl(*q)
             time.sleep(0.05)
 

@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QCheckBox, QMessageBox,
+    QComboBox, QMessageBox,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
@@ -21,7 +21,7 @@ BITRATE_OPTIONS = [
 class ToolbarPanel(QWidget):
     """顶部工具栏（单行固定高度）"""
 
-    connect_requested = pyqtSignal(str, bool)
+    connect_requested = pyqtSignal(str)
     disconnect_requested = pyqtSignal()
     enable_requested = pyqtSignal()
     disable_requested = pyqtSignal()
@@ -71,10 +71,6 @@ class ToolbarPanel(QWidget):
             self.bitrate_combo.addItem(label, val)
         self.bitrate_combo.setCurrentIndex(0)
         row.addWidget(self.bitrate_combo)
-
-        self.sim_check = QCheckBox("模拟")
-        self.sim_check.setToolTip("无需硬件的模拟模式")
-        row.addWidget(self.sim_check)
 
         self._add_sep(row)
 
@@ -202,8 +198,7 @@ class ToolbarPanel(QWidget):
     def _on_connect_clicked(self):
         if not self._connected:
             can_name = self._get_selected_can_name()
-            sim = self.sim_check.isChecked()
-            self.connect_requested.emit(can_name, sim)
+            self.connect_requested.emit(can_name)
         else:
             self.disconnect_requested.emit()
 
@@ -234,7 +229,6 @@ class ToolbarPanel(QWidget):
         self.refresh_btn.setEnabled(can_area_enabled)
         self.can_toggle_btn.setEnabled(can_area_enabled)
         self.bitrate_combo.setEnabled(can_area_enabled)
-        self.sim_check.setEnabled(can_area_enabled)
 
         self.connect_btn.style().unpolish(self.connect_btn)
         self.connect_btn.style().polish(self.connect_btn)

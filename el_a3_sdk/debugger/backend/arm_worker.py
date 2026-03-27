@@ -44,6 +44,7 @@ class ArmWorker(QThread):
     log_message = pyqtSignal(str)
     can_fps_updated = pyqtSignal(float)
     zero_sta_verified = pyqtSignal(list)
+    motor_scan_result = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +140,8 @@ class ArmWorker(QThread):
             self._do_set_zero(*args)
         elif cmd == "verify_zero_sta":
             self._do_verify_zero_sta()
+        elif cmd == "scan_motors":
+            self._do_scan_motors()
         elif cmd == "read_motor_param":
             self._do_read_param(*args)
         elif cmd == "write_motor_param":
@@ -350,11 +353,6 @@ class ArmWorker(QThread):
     def _do_verify_zero_sta(self):
         from el_a3_sdk.protocol import ParamIndex
         results = []
-        if self._sim_mode:
-            results = [(mid, 1.0, True) for mid in range(1, 8)]
-            self.zero_sta_verified.emit(results)
-            self.log_message.emit("ZERO_STA 校验完成（模拟）: 全部通过")
-            return
         if not self.arm:
             return
         self.log_message.emit("开始校验 ZERO_STA 参数...")
@@ -362,15 +360,17 @@ class ArmWorker(QThread):
         for mid in range(1, 8):
             result = self.arm.ReadMotorParameter(mid, ParamIndex.ZERO_STA)
             if result and result.success:
-                val = result.value
-                ok = abs(val - 1.0) < 0.01
+                val = result.value_uint8
+                ok = (val == 1)
                 results.append((mid, val, True))
                 status = "✓" if ok else "✗"
-                self.log_message.emit(f"  电机{mid} ZERO_STA = {val:.0f} {status}")
+                raw_hex = result.raw_bytes.hex() if result.raw_bytes else ""
+                self.log_message.emit(
+                    f"  电机{mid} ZERO_STA = {val} {status}  (raw: {raw_hex})")
                 if not ok:
                     all_ok = False
             else:
-                results.append((mid, 0.0, False))
+                results.append((mid, 0, False))
                 self.log_message.emit(f"  电机{mid} ZERO_STA 读取失败")
                 all_ok = False
         self.zero_sta_verified.emit(results)
@@ -378,6 +378,33 @@ class ArmWorker(QThread):
             self.log_message.emit("ZERO_STA 校验完成: 全部通过")
         else:
             self.log_message.emit("ZERO_STA 校验完成: 存在异常")
+
+    def _do_scan_motors(self):
+        results = []
+        if self._sim_mode:
+            results = [(mid, True, "v1.0.0-sim", 24.0) for mid in range(1, 8)]
+            self.motor_scan_result.emit(results)
+            self.log_message.emit("电机扫描完成（模拟）: 7/7 在线")
+            return
+        if not self.arm:
+            return
+        self.log_message.emit("开始扫描电机...")
+        online_count = 0
+        for mid in range(1, 8):
+            fw = self.arm.GetFirmwareVersion(mid)
+            voltage = self.arm.GetMotorVoltage(mid)
+            online = fw is not None or voltage is not None
+            fw_str = fw.version_str if fw else ""
+            if online:
+                online_count += 1
+                v_str = f" {voltage:.1f}V" if voltage is not None else ""
+                self.log_message.emit(
+                    f"  电机{mid}: 在线  固件={fw_str or '—'}{v_str}")
+            else:
+                self.log_message.emit(f"  电机{mid}: 离线")
+            results.append((mid, online, fw_str, voltage))
+        self.motor_scan_result.emit(results)
+        self.log_message.emit(f"电机扫描完成: {online_count}/7 在线")
 
     def _do_read_param(self, motor_id, param_index):
         if self._sim_mode:
